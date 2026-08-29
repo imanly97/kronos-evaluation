@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Post-close grading. Runs the morning AFTER a session so Yahoo's consolidated
+     official close is settled (PLAN §7 / suggestion 3). -->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.narrativearb.evaluate</string>
+  <key>WorkingDirectory</key>
+  <string>/Users/isaac/Desktop/narrative arb</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/Users/isaac/Desktop/narrative arb/.venv/bin/python</string>
+    <string>-m</string>
+    <string>src.run_nightly</string>
+    <string>evaluate</string>
+  </array>
+  <key>StartCalendarInterval</key>
+  <dict>
+    <key>Hour</key><integer>9</integer>
+    <key>Minute</key><integer>45</integer>
+  </dict>
+  <key>StandardOutPath</key>
+  <string>/Users/isaac/Desktop/narrative arb/log/launchd.evaluate.out</string>
+  <key>StandardErrorPath</key>
+  <string>/Users/isaac/Desktop/narrative arb/log/launchd.evaluate.err</string>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key>
+    <string>/usr/bin:/bin:/usr/sbin:/sbin:/usr/local/bin</string>
+  </dict>
+</dict>
+</plist>

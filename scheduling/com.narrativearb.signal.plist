@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Local backup scheduler. Primary is GitHub Actions (.github/workflows/nightly.yml).
+     Install:  cp scheduling/*.plist ~/Library/LaunchAgents/
+               launchctl load ~/Library/LaunchAgents/com.narrativearb.signal.plist
+     Edit WorkingDirectory / ProgramArguments paths to match your machine.
+     Laptop-sleep caveat: if the lid is shut at 08:45 ET the run is missed and
+     logged as a coverage gap (PLAN §10). Keep plugged in + `caffeinate -s`. -->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.narrativearb.signal</string>
+  <key>WorkingDirectory</key>
+  <string>/Users/isaac/Desktop/narrative arb</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/Users/isaac/Desktop/narrative arb/.venv/bin/python</string>
+    <string>-m</string>
+    <string>src.run_nightly</string>
+    <string>signal</string>
+  </array>
+  <key>StartCalendarInterval</key>
+  <dict>
+    <key>Hour</key><integer>8</integer>
+    <key>Minute</key><integer>45</integer>
+  </dict>
+  <key>StandardOutPath</key>
+  <string>/Users/isaac/Desktop/narrative arb/log/launchd.signal.out</string>
+  <key>StandardErrorPath</key>
+  <string>/Users/isaac/Desktop/narrative arb/log/launchd.signal.err</string>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key>
+    <string>/usr/bin:/bin:/usr/sbin:/sbin:/usr/local/bin</string>
+  </dict>
+</dict>
+</plist>

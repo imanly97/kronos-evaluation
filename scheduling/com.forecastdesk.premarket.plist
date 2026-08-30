@@ -1,22 +1,22 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!-- Local backup scheduler. Primary is GitHub Actions (.github/workflows/nightly.yml).
      Install:  cp scheduling/*.plist ~/Library/LaunchAgents/
-               launchctl load ~/Library/LaunchAgents/com.narrativearb.signal.plist
+               launchctl load ~/Library/LaunchAgents/com.forecastdesk.premarket.plist
      Edit WorkingDirectory / ProgramArguments paths to match your machine.
      Laptop-sleep caveat: if the lid is shut at 08:45 ET the run is missed and
-     logged as a coverage gap (PLAN §10). Keep plugged in + `caffeinate -s`. -->
+     logged as a coverage gap (PLAN §11). Keep plugged in + `caffeinate -s`. -->
 <plist version="1.0">
 <dict>
   <key>Label</key>
-  <string>com.narrativearb.signal</string>
+  <string>com.forecastdesk.premarket</string>
   <key>WorkingDirectory</key>
-  <string>/Users/isaac/Desktop/narrative arb</string>
+  <string>/Users/isaac/Desktop/foundation_model_desk</string>
   <key>ProgramArguments</key>
   <array>
-    <string>/Users/isaac/Desktop/narrative arb/.venv/bin/python</string>
+    <string>/Users/isaac/Desktop/foundation_model_desk/.venv/bin/python</string>
     <string>-m</string>
-    <string>src.run_nightly</string>
-    <string>signal</string>
+    <string>src.run_daily</string>
+    <string>premarket</string>
   </array>
   <key>StartCalendarInterval</key>
   <dict>
@@ -24,9 +24,9 @@
     <key>Minute</key><integer>45</integer>
   </dict>
   <key>StandardOutPath</key>
-  <string>/Users/isaac/Desktop/narrative arb/log/launchd.signal.out</string>
+  <string>/Users/isaac/Desktop/foundation_model_desk/log/launchd.premarket.out</string>
   <key>StandardErrorPath</key>
-  <string>/Users/isaac/Desktop/narrative arb/log/launchd.signal.err</string>
+  <string>/Users/isaac/Desktop/foundation_model_desk/log/launchd.premarket.err</string>
   <key>EnvironmentVariables</key>
   <dict>
     <key>PATH</key>

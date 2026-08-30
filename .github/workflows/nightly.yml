@@ -1,20 +1,24 @@
-name: nightly-narrative-arb
+name: forecast-desk-loop
 
 # Times are UTC. US market open 09:30 ET => 13:30/14:30 UTC (DST-dependent).
-# We run the signal job ~08:45 ET and the evaluate job ~09:45 ET next morning,
-# and just accept the DST half-hour drift (logged, not corrected).
+# premarket runs ~08:45 ET (forecasts + triage); postclose runs ~16:45 ET
+# (grade the forecast that just settled + post-mortem, writing desk memory).
+# We accept the DST half-hour drift (logged, not corrected).
 on:
   schedule:
-    - cron: "45 12 * * 2-6"   # signal:   ~08:45 ET (EDT) Tue-Sat
-    - cron: "45 13 * * 2-6"   # evaluate: ~09:45 ET (EDT) Tue-Sat
+    - cron: "45 12 * * 1-5"    # premarket ~08:45 ET (EDT) Mon-Fri
+    - cron: "45 20 * * 1-5"    # postclose ~16:45 ET (EDT) Mon-Fri
   workflow_dispatch:
     inputs:
       mode:
-        description: signal | evaluate
-        default: signal
+        description: premarket | postclose
+        default: premarket
+      asof:
+        description: "session date (YYYY-MM-DD); blank = today / last settled"
+        default: ""
 
 concurrency:
-  group: narb-nightly
+  group: forecast-desk-loop
   cancel-in-progress: false
 
 jobs:
@@ -47,23 +51,31 @@ jobs:
         run: |
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
             echo "mode=${{ github.event.inputs.mode }}" >> "$GITHUB_OUTPUT"
-          elif [ "${{ github.event.schedule }}" = "45 12 * * 2-6" ]; then
-            echo "mode=signal" >> "$GITHUB_OUTPUT"
+            echo "asof=${{ github.event.inputs.asof }}" >> "$GITHUB_OUTPUT"
+          elif [ "${{ github.event.schedule }}" = "45 12 * * 1-5" ]; then
+            echo "mode=premarket" >> "$GITHUB_OUTPUT"
           else
-            echo "mode=evaluate" >> "$GITHUB_OUTPUT"
+            echo "mode=postclose" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Run
+      - name: Run the loop
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           ANTHROPIC_WORKSPACE_ID: ${{ secrets.ANTHROPIC_WORKSPACE_ID }}
           KRONOS_DEVICE: cpu
-        run: python -m src.run_nightly ${{ steps.mode.outputs.mode }}
-
-      - name: Commit the log
         run: |
-          git config user.name  "narb-bot"
+          ASOF="${{ steps.mode.outputs.asof }}"
+          if [ -n "$ASOF" ]; then
+            python -m src.run_daily ${{ steps.mode.outputs.mode }} --asof "$ASOF"
+          else
+            python -m src.run_daily ${{ steps.mode.outputs.mode }} \
+              --asof "$(python -c 'import datetime as d; print(d.date.today())')"
+          fi
+
+      - name: Commit the log + memory
+        run: |
+          git config user.name  "forecast-desk-bot"
           git config user.email "actions@users.noreply.github.com"
-          git add log/ case_studies/headlines/ || true
-          git diff --cached --quiet || git commit -m "nightly ${{ steps.mode.outputs.mode }} $(date -u +%FT%TZ)"
+          git add log/ memory/ || true
+          git diff --cached --quiet || git commit -m "loop ${{ steps.mode.outputs.mode }} $(date -u +%FT%TZ)"
           git push

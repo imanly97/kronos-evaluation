@@ -1,4 +1,4 @@
-# Narrative Arbitrage pilot — pinned deps.
+# Forecast Desk — pinned deps.
 # Installed into a project-local .venv (see README) so the anaconda base env
 # and its jupyter stay untouched.
 
@@ -22,7 +22,7 @@ curl_cffi==0.7.4
 yfinance==0.2.51
 # Stooq fallback is a plain CSV URL fetch — no extra dep.
 
-# --- narrative + divergence (LLM) ---
+# --- agents (LLM) ---
 anthropic==0.68.0
 langgraph==0.2.60
 langchain-core==0.3.29

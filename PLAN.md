@@ -1,33 +1,41 @@
-# Daily Narrative Arbitrage — Project Plan
+# Forecast Desk — an agentic research loop around a price forecaster
 
-**Status:** draft for sign-off · **Owner:** you · **Assist:** Claude
-**Project root:** `~/Desktop/narrative arb/`
+**Status:** in build (pivot from the "narrative arbitrage" v1)
+**Owner:** you · **Assist:** Claude · **Root:** `~/Desktop/foundation_model_desk/`
+**Repo:** `github.com/imanly97/narrative_arbitrage` (rename to `foundation_model_desk` pending)
 
 ---
 
-## 1. Thesis (the honest research claim)
+## 1. Thesis
 
-> A daily-frequency pilot using free retail data. Each pre-market open we generate
-> a signal from (a) **Kronos**'s probabilistic price forecast, which sees only price
-> structure, and (b) an **LLM narrative score** built from overnight headlines, which
-> is blind to price. We measure whether — and *when* — these two disagree, and which
-> one better anticipates the day's actual close-to-close move. **No execution, no PnL,
-> no trades.** Just tracked signals, evaluated at the close, logged immutably for a month.
+> A probabilistic price forecaster (**Kronos**) produces a distribution per name
+> per day. That distribution is a *number*, not a view. This project builds the
+> **research loop a junior analyst runs around such a forecast**: every morning,
+> triage the universe down to the few names worth a human's attention and brief
+> each one; every evening, review what happened and write down *why* the model
+> was right or wrong. The evening notes accumulate into a **desk memory** that
+> the next morning's triage reads back — so the loop learns this desk's track
+> record with the model **without ever retraining the model**.
 
-This is deliberately a *pilot*, not a statistical proof. Daily frequency gives one
-observation per ticker per day; a month is ~20 trading days × 12 tickers ≈ 240 signal-days.
-Enough for calibration eyeballing and illustrative divergence cases with honest confidence
-intervals — not enough for a strong alpha claim, and we won't pretend otherwise.
+The forecasting pipeline is deterministic infrastructure — a scheduled job, not
+an agent. The agentic work is the layer on top: *what is worth looking at*, and
+*what did we just learn*. That split — and being able to defend it — is the point.
 
 ---
 
 ## 2. Scope & non-goals
 
-**In scope:** signal generation, distributional forecasting, narrative scoring, a
-divergence verdict, immutable logging, close-of-day evaluation, and two blog posts.
+**In scope:** deterministic Kronos batch + forecast cache; cross-sectional and
+per-name-historical features; a **triage agent** that produces a briefed
+watchlist; a **groundedness critic**; a **post-mortem agent** that classifies
+each day's outcomes and writes structured memory; a **desk-memory store** with
+key-based recall; the feedback edge (triage reads memory); an evaluation harness;
+an MCP server; a blog post on the loop and the eval methodology.
 
-**Non-goals (explicit):** placing trades, position sizing, PnL/backtest returns,
-transaction-cost modeling, intraday execution, or any claim of tradable alpha.
+**Non-goals:** trades, position sizing, PnL/returns, transaction costs, intraday
+execution, any claim of tradable alpha. Also **not** retraining, fine-tuning, or
+recalibrating Kronos — a real desk does that rarely and with heavy justification,
+never on a nightly cadence. The model is a fixed input.
 
 ---
 
@@ -35,269 +43,255 @@ transaction-cost modeling, intraday execution, or any claim of tradable alpha.
 
 | # | Decision | Choice | Why |
 |---|----------|--------|-----|
-| D1 | Frequency | **Daily** | Kronos small/base context = 512 → ~2yr lookback; free daily data is the most reliable; overnight-headline → next-close horizon maps cleanly to one daily bar. |
-| D2 | Model | **Kronos-small** nightly (base for spot-checks) | 24.7M params runs on the MacBook's **MPS** (auto-detected); base for occasional deeper looks. |
-| D3 | Horizon | **pred_len = 3**, graded on **bar 1** | First predicted bar = `asof`; we grade its close-to-close move same day. Bars 2–3 shown for context only. |
-| D4 | Prices | **yfinance** (API call) → **Stooq** fallback → cache | yfinance is primary as requested; Stooq covers Yahoo's periodic outages; CSV cache is inspectable. |
-| D5 | Historical headlines | **Manual curation** (cited) | yfinance `.news` is current-only and flaky; past headlines can't be scraped with trustworthy timestamps. |
-| D6 | Live headlines | **Nightly LangGraph agent** | Real tool-use: source selection, dedupe, materiality judgment, graceful no-news. |
-| D7 | LLM | **Anthropic API (Claude)**, key from env | You supply `ANTHROPIC_API_KEY`; never committed. |
-| D8 | Orchestration | **LangGraph** state machine | Directly matches the JD's agentic-framework requirement; genuine branching/state, not cosmetic. |
-| D9 | Store | **SQLite**, append-only, timestamped | Signals locked at generation; evaluation joined later by (ticker, date). |
-| D10 | Schedule | **launchd** (macOS) | Native; two jobs (pre-market signal, post-close eval). Laptop-sleep caveat handled in §10. |
+| D1 | Primary mode | **Historical replay** of the loop over a chosen window (e.g. last 3 months, day by day) | Results now, fully reproducible; the memory accumulates and the ablation runs offline. Live daily deployment is optional, not load-bearing. |
+| D2 | Forecaster | **Kronos-small**, 200 sampled paths, **120-bar lookback** | v1 finding: long daily lookbacks destabilise the sampler for names near range extremes. 120 bars is the stable operating point. Carried over. |
+| D3 | Horizon | `pred_len = 3`, graded on **bar 1** (the `asof` bar), close-to-close | Carried over from v1. |
+| D4 | Universe | **~40 liquid US large-caps** for the loop (dev on the v1 set of 12) | Triage needs enough names to be a real filter. ~40 × ~10s/name on MPS ≈ 7 min/day. |
+| D5 | Prices | **yfinance/Yahoo chart API via curl_cffi → Stooq → cache** | Carried over from v1 (the plain requests UA gets 429'd). |
+| D6 | Orchestration | **LangGraph** for the triage, critic, and post-mortem graphs | Real branching and loops, not linear chains. |
+| D7 | LLM | **Anthropic API (Claude)**, key + optional workspace-id from env | Carried over. `.env` is gitignored. |
+| D8 | Memory | **Append-only JSONL episodes + a derived per-(ticker, setup) stats table**, deterministic key-based recall | Inspectable; no embedding dependency; the recall is evaluable. Semantic recall is a v1.5 stretch. |
+| D9 | Store | **Append-only JSONL + SHA-256 hash chain + SQLite mirror** | Carried over from v1 `store.py`. |
+| D10 | Setup vocabulary | Small controlled list (momentum-breakout, range-bound, post-gap-drift, vol-expansion, mean-reversion-candidate, trend-continuation, quiet) | The shared key between a brief and a memory entry. |
 
 ---
 
-## 4. The one thing that would have silently broken it
-
-Kronos's `predict(..., sample_count=N)` runs N sampled paths in one batched pass and then
-**averages them** (`np.mean(..., axis=1)` in `auto_regressive_inference`) before returning.
-So the vanilla call yields a smoothed *mean* path and **zero dispersion** — no 5th–95th
-envelope, which is the entire point of the project.
-
-**Fix (locked):** vendor a ~20-line `sample_paths()` that runs the identical batched
-inference but returns the array *before* the mean → shape `(sample_count, horizon, features)`.
-One pass, full distribution, code we own. This lives in `src/kronos_infer.py`.
-
----
-
-## 5. Architecture
-
-Nightly run is a **LangGraph graph**, not a linear script. Guiding principle: *use an agent
-only where there is genuine reasoning/tool-selection; keep everything else deterministic* —
-and say so in the post (that restraint is itself the signal BAM broadcasts).
-
-| Stage | Agentic? | What it does |
-|-------|----------|--------------|
-| `load_prices` | Deterministic | yfinance→Stooq, cache, `asof` no-lookahead rule |
-| `run_kronos` | Deterministic | `sample_paths()` → per-step quantiles (5/25/50/75/95) |
-| `headlines_agent` (per ticker) | **Agent** | Source selection, fetch, dedupe, materiality, no-news handling — price-blind |
-| `score_narrative` | Structured LLM | direction ∈ {bear/neutral/bull} + conviction 1–10 + rationale — price-blind |
-| `assess_divergence` | **Agent** | Reasons over Kronos quantiles + narrative; emits a PM-readable brief — grounded in the numbers |
-| `persist_signals` | Deterministic | Lock + timestamp to SQLite |
-
-**Second graph (post-close, next day):** `evaluate` joins locked signals with the actual
-close → coverage, direction hit, divergence outcome.
-
-**Conditional edges:** yfinance fail → Stooq → else drop ticker & log; no material news →
-neutral narrative but still score structure (a structure-only signal with no catalyst is
-itself an interesting row).
-
-**MCP (differentiator):** expose `get_kronos_distribution(ticker)` and `get_headlines(ticker)`
-as MCP tools so the same capabilities are callable by any MCP client — the post's "a PM's
-assistant could query this directly" framing. Slots into the headline/divergence chunk.
-
----
-
-## 6. Divergence definition — v1 (finalize at chunk 4)
-
-- **Narrative signal:** `S_N = direction × conviction`, direction ∈ {−1, 0, +1}, conviction ∈ [1,10]. Price-blind.
-- **Structural signal (from Kronos next-day close-return distribution `r`):**
-  - direction = `sign(median(r))`
-  - strength = `median(r) / std(r)` (median move in units of the forecast's own dispersion), plus `P(r > 0)`.
-- **Divergence types:**
-  - *Directional:* `sign(S_N) ≠ sign(median(r))`.
-  - *Magnitude:* narrative high-conviction, but the narrative-implied direction sits in a low-probability region of Kronos's distribution (structure thinks the expected move is unlikely).
-- **Adjudication (at close):** on divergence rows, which side matched the sign (and rough magnitude) of the actual close-to-close return?
-
----
-
-## 7. Evaluation metrics
-
-- **Calibration / coverage:** fraction of actual closes landing inside the 5–95 envelope (well-calibrated ⇒ ~90%). Report per-ticker and pooled, with the caveat that n is small.
-- **Directional hit rate:** did `sign(median(r))` match the actual return sign? Baseline 50%. Same for narrative direction.
-- **Divergence-conditioned:** on rows where narrative and structure disagreed, win rate of each side. This is the headline research question.
-- **Data quality:** scheduled-vs-actual run coverage (see §10) reported honestly.
-
----
-
-## 8. Persistence (SQLite schema sketch)
+## 4. The loop
 
 ```
-signals(   asof DATE, ticker TEXT, gen_ts TIMESTAMP,
-           kronos_q05, kronos_q50, kronos_q95, kronos_p_up, kronos_std,
-           narr_dir INT, narr_conviction INT, narr_rationale TEXT,
-           divergence_type TEXT, divergence_verdict TEXT, brief TEXT,
-           PRIMARY KEY (asof, ticker) )        -- locked, never updated
-
-actuals(   asof DATE, ticker TEXT, prev_close, actual_close, ret,
-           inside_envelope BOOL, dir_match_struct BOOL, dir_match_narr BOOL,
-           PRIMARY KEY (asof, ticker) )        -- written next day by evaluate
+                    ┌───────────────── DESK MEMORY (JSONL episodes + stats) ─────────────────┐
+                    │                                                                       │
+   PRE-MARKET       ▼                                                     POST-CLOSE         │
+  ┌───────────────────────────┐                                    ┌───────────────────────────┐
+  │ build_panel   (det.)      │                                    │ load_actuals  (det.)      │
+  │ run_forecasts (det.)      │                                    │ grade_forecasts (det.)    │
+  │ compute_features (det.)   │                                    │                           │
+  │      │                    │                                    │      │                    │
+  │      ▼                    │                                    │      ▼                    │
+  │ TRIAGE agent (LangGraph)  │   ──► watchlist.jsonl  ──►  humans  │ POST-MORTEM agent         │
+  │  loop: pick candidate →   │        + brief.md          read it  │  focus: watchlist names + │
+  │   describe setup →        │                                    │   tail surprises          │
+  │   find analogs →          │                                    │  classify each miss:      │
+  │   recall memory →         │                                    │   within dispersion? or   │
+  │   keep/drop → write brief │                                    │   identifiable cause?     │
+  │      │                    │                                    │      │                    │
+  │      ▼                    │                                    │      ▼                    │
+  │ CRITIC loop: every number │                                    │ write memory episodes ────┘
+  │  matches a computed value │                                    │ update (ticker,setup) stats
+  └───────────────────────────┘                                    └───────────────────────────┘
 ```
 
-Signals are immutable once written; evaluation only ever inserts into `actuals`.
+**Deterministic (no LLM):** `build_panel`, `run_forecasts`, `compute_features`,
+`load_actuals`, `grade_forecasts`, memory-stats rollups. These are cron jobs.
+
+**Agentic:** triage, critic, post-mortem. Each is a LangGraph graph with genuine
+state and conditional branching — the sequence of steps depends on what the
+prior step found.
 
 ---
 
-## 9. Repo layout (under project root)
+## 5. Agentic components
+
+### 5.1 Triage agent
+**Goal:** from ~40 forecasts, select the 3–7 worth a human's morning and brief each.
+
+**Tools:**
+- `rank_forecasts()` → table: median, P(up), dispersion, strength (|median|/dispersion), and each name's strength **z-scored against its own trailing year** (is today unusual *for this name*).
+- `describe_setup(ticker)` → deterministic features (trend slope, distance from N-day high/low, realized vol vs trailing, recent gap, range position) + a controlled-vocab label (D10).
+- `find_analogs(ticker, setup)` → past dates for this name in the same setup and their forward close-to-close outcomes.
+- `correlated_cluster(ticker)` → are correlated names all pointing the same way (macro/sector) or is this idiosyncratic?
+- `recall_memory(ticker, setup)` → the desk's prior episodes and hit rate for this exact situation.
+
+**Loop / state:** candidates considered, findings, briefs drafted. Pick a
+candidate → investigate → decide keep/drop → if keep, draft brief → next.
+Terminate on a per-run token budget or when the ranked candidates are exhausted.
+
+**Output:** `watchlist.jsonl` (structured) + `brief_<asof>.md` (PM-readable). Each
+brief: why flagged, the setup, the analog base rate, the correlated-cluster
+read, the desk-memory track record, and a one-line confidence caveat.
+
+### 5.2 Groundedness critic
+Writer/critic pair. The critic extracts every quantitative claim from each brief
+and checks it against the computed feature/forecast values; flags unsupported
+numbers, overclaims, and missing caveats; sends back for revision until clean.
+Target: **100% of numeric claims traceable to a computed value.**
+
+### 5.3 Post-mortem agent
+**Goal:** for the watchlist names and the day's biggest surprises (actual far in
+the forecast tail), classify *why*.
+
+**Tools:** `quantile_of_actual(ticker)` (where did the close land in Kronos's
+distribution), `sector_move(asof)` (did the whole cluster move — regime vs
+idiosyncratic), `known_catalyst(ticker, asof)` (earnings-calendar / scheduled
+macro lookup — a curated/queried set, **not** sentiment), `data_sanity(ticker)`.
+
+**Classification per name:** `within-expected-dispersion` | `catalyst:<type>` |
+`regime-move` | `data-issue` | `unexplained`.
+
+**Output:** memory episodes: `{asof, ticker, setup, forecast_median, actual,
+actual_quantile, classification, note}`; and updated per-(ticker, setup) rolling
+stats: `n`, `hit_rate`, `mean_signed_error`, `mean_abs_error`.
+
+### 5.4 Desk memory
+`memory/episodes.jsonl` (append-only, hash-chained) + `memory/stats.json`
+(derived, rebuildable). Recall is deterministic: `recall(ticker, setup)` returns
+the episodes and the aggregate stat line. This is what closes the loop.
+
+---
+
+## 6. Deterministic core
+
+| Module | Does |
+|--------|------|
+| `data.py` | no-lookahead daily bars, Yahoo→Stooq→cache *(carried over from v1, unchanged)* |
+| `kronos_infer.py` | `sample_paths()` / `forecast()` — Kronos with dispersion restored *(carried over, ~unchanged)* |
+| `features.py` | cross-sectional ranking, per-name strength z-score, correlated clusters |
+| `setups.py` | technical-feature extraction + controlled-vocab setup label |
+| `forecasts.py` | batch Kronos over the universe → forecast cache |
+| `grade.py` | actual close → quantile position, envelope coverage, direction match |
+| `store.py` | append-only JSONL + hash chain + SQLite mirror *(carried over, new schema)* |
+| `llm.py` | shared Anthropic client (workspace-id aware) *(carried over)* |
+
+---
+
+## 7. Evaluation
+
+Chosen partly *because* it is evaluable with checks you can reason about (unlike
+conformal-coverage math).
+
+**Triage agent**
+- **Groundedness** — % of numeric claims in briefs that match a computed value. Hard target 100%.
+- **Eventfulness** — flagged names vs unflagged: distribution of |actual return|, realized range, and |actual − forecast median| in quantile terms. Flagged should skew eventful.
+- **Human agreement** — for ~20 sampled days you pick your own top-5 from the raw forecast table; measure overlap with the agent.
+- **Ablation** — run triage with memory **on vs off** over a held-out stretch; compare eventfulness and human-agreement.
+
+**Post-mortem agent**
+- **Catalyst recall** — on known earnings/Fed days, does it name the catalyst as the cause? (planted-label test)
+- **Dispersion self-consistency** — when it says "within expected dispersion," the actual should sit in the 50–80% interval; when it says "something happened," in the tail. Check the correspondence over many days.
+- **Groundedness** — as above.
+
+**Memory**
+- **Base-rate validity** — does a setup's claimed hit rate actually predict forward outcomes on later, unseen dates?
+
+---
+
+## 8. Persistence (schema sketch)
 
 ```
-~/Desktop/narrative arb/
+forecasts(  asof, ticker, gen_ts, price_source, context_to, prev_close,
+            q05,q25,q50,q75,q95, p_up, std, strength, strength_z )   -- immutable
+watchlist(  asof, ticker, rank, setup, reason, analog_base_rate,
+            cluster_read, memory_line, caveat, brief_md )            -- immutable, per run
+actuals(    asof, ticker, eval_ts, prev_close, actual_close, ret,
+            actual_quantile, inside_envelope, dir_match )            -- next day
+memory/episodes(  asof, ticker, setup, forecast_median, actual,
+                  actual_quantile, classification, note )            -- append-only, chained
+memory/stats.json  ->  { "<ticker>|<setup>": {n, hit_rate, mean_signed_err, mean_abs_err} }
+```
+
+---
+
+## 9. Repo layout
+
+```
+~/Desktop/foundation_model_desk/
   PLAN.md
-  case_studies/
-    nvda_2025-05-29.md         # ← exemplar (this batch)
   src/
-    data.py                    # ✓ built & offline-tested
-    kronos_infer.py            # chunk 2: sample_paths + quantiles + fan chart
-    headlines_agent.py         # chunk 3: LangGraph headline sub-agent
-    narrative.py               # chunk 3b: structured scorer (Claude)
-    divergence.py              # chunk 4: grounded divergence agent
-    graph.py                   # chunk 5: LangGraph wiring
-    store.py                   # SQLite log + eval join
-    evaluate.py                # chunk 6: coverage / direction / divergence
-    run_nightly.py             # scheduler entrypoint
-    mcp_server.py              # optional: expose tools over MCP
-  cache/prices/                # inspectable CSVs
-  narb.db                      # SQLite
-  scheduling/
-    com.narrativearb.signal.plist
-    com.narrativearb.evaluate.plist
-  blog/
-    post1_build.md
-    post2_results.md
+    config.py         data.py       kronos_infer.py    llm.py        # carried over
+    features.py        setups.py     forecasts.py       grade.py      # new deterministic
+    triage.py          critic.py     postmortem.py      memory.py     # new agents
+    store.py           run_daily.py  mcp_server.py                    # adapted / glue
+  notebooks/
+    walkthrough.ipynb            # one asof: forecast -> triage -> brief -> grade -> post-mortem
+    loop_replay.ipynb            # N days replayed; memory accumulating; the ablation
+  eval/
+    build_catalysts.py         # scheduled-event calendar (Nasdaq earnings + curated macro)
+    evaluate.py                # the metrics harness (§7)
+    human_picks.json           # your own top-5 per day, for the human-agreement metric
+  cache/prices/     log/     memory/     hf_cache/     vendor_kronos/     .venv/
+  scheduling/       .github/workflows/     scripts/setup.sh
+  blog/post_loop.md
 ```
 
 ---
 
-## 10. Ops for a month-long unattended run
+## 10. What carries over from v1
 
-- **Scheduling:** `launchd` with two `StartCalendarInterval` jobs — signal ~08:45 ET, evaluate ~16:15 ET.
-- **Laptop-sleep reality:** if the lid is shut at trigger time, the job is missed. Mitigations: keep plugged in and use `caffeinate`, or `pmset schedule wake`, or accept misses and **log** them. The follow-up post reports run coverage as a data-quality section, not an embarrassment. If misses get bad, lift the nightly job to a small cloud box.
-- **Secrets:** `.env` + `python-dotenv`; `ANTHROPIC_API_KEY` from env; `.gitignore` the `.env`, `cache/`, and `narb.db`.
+| Keep as-is | Adapt | Drop |
+|---|---|---|
+| `data.py`, `kronos_infer.py`, `llm.py` | `config.py` (drop divergence/narrative knobs; add triage/memory/universe) | `narrative.py` |
+| `scripts/setup.sh`, `.env`, `.gitignore`, `requirements.txt` | `store.py` (machinery kept, schema replaced) | `headlines_agent.py` |
+| venv, vendored Kronos, weights | `evaluate.py` (Wilson CI + report skeleton kept, metrics new) | `divergence.py` |
+| the v1 findings (curl_cffi Yahoo, MPS `.eval()`, sampler vendoring, 120-bar lookback) | `.github/workflows/`, `scheduling/` (same skeleton, new commands) | `case_studies/` + the 3 case notebooks |
+| hash-chain + no-lookahead tests | `mcp_server.py` (new tools) | `blog/post1_build.md` |
 
----
-
-## 11. Timeline
-
-| Phase | When | Output |
-|-------|------|--------|
-| 0 | now | This plan + exemplar case study (sign-off) |
-| 1 | Sat | `kronos_infer.py` (sampler, quantiles, first real fan chart), `store.py`; verify on 1–2 tickers |
-| 2 | Sun | Run 3 case studies (manual headlines); draft **post 1**: architecture + case studies |
-| 3 | Sun night → | Stand up the LangGraph nightly graph + launchd; **go live ~1 month** |
-| 4 | after ~20 trading days | `evaluate` results; draft **post 2**: the follow-up |
-
-**Post 1** publishes after Phase 2 ("live tracking starts today"). **Post 2** is the results follow-up.
+Every line of the deterministic spine and all the hard-won infra survives. The
+LLM layer changes — and that layer was always the part that would.
 
 ---
 
-## 12. Blog structure (chunked, so it's never a black box)
+## 11. Ops
 
-1. **The claim & why daily** — framing, non-goals.
-2. **Data** — yfinance-as-API, the `asof` no-lookahead rule, cache, Stooq fallback (show the summary table).
-3. **Kronos & trajectories** — the tokenizer/AR idea, the averaging gotcha, sampled paths (show raw trajectories).
-4. **Distribution** — fan charts, per-step quantiles, a coverage sanity check.
-5. **Narrative** — the price-blind scorer, prompt design, an example score + rationale.
-6. **Divergence** — the agent, the v1 definition, a worked verdict.
-7. **Evaluation** — coverage, direction, divergence-conditioned; honest CIs.
-8. **Architecture** — the LangGraph graph, agent-vs-deterministic restraint, MCP.
-9. **Live tracking begins** — what post 2 will answer.
+- **Replay** is the default: `run_daily replay` walks the window and the memory
+  accumulates exactly as it would live.
+- **Live** (optional): two scheduled jobs — pre-market triage, post-close
+  post-mortem — via GitHub Actions (primary) or launchd (backup). Commit `log/`
+  and `memory/` back each run; git history is the tamper-evidence.
+- **Contamination — Kronos:** Kronos-small's pretraining data ends **~June 2024**
+  (Shi et al., *Kronos*, arXiv:2508.02739; test period begins July 2024). The
+  replay window (May–Aug 2025) is **~11 months out of sample** — the forecasts
+  are genuine predictions, not lookups of known price paths. The `src/baseline.py`
+  numbers confirm the model behaves like a real forecaster, not an oracle
+  (unbiased median, *no* directional edge, overconfident intervals).
+- **Contamination — agents:** the post-mortem *may* know historical catalysts —
+  fine and helpful, since its job is to identify them and we score whether it
+  does. The triage agent makes no market prediction (it selects and describes),
+  so outcome-knowledge doesn't bias it. Historical replay is a legitimate test
+  here, unlike v1.
+
+---
+
+## 12. Timeline
+
+| Phase | Output |
+|-------|--------|
+| 1 | Deterministic core: `forecasts.py`, `features.py`, `setups.py`, `grade.py`; forecast cache for a replay window; new `store.py` schema |
+| 2 | `triage.py` + tools + `critic.py`; `walkthrough.ipynb` for one `asof` |
+| 3 | `postmortem.py` + `memory.py`; close the loop (triage reads memory) |
+| 4 | `eval/` harness + `loop_replay.ipynb` (the ablation) |
+| 5 | `mcp_server.py`; blog draft |
+| 6 | (optional) launchd / GitHub Actions for live daily |
 
 ---
 
 ## 13. JD alignment (Balyasny — Applied AI Scientist)
 
-- *Agentic workflows / research automation* → the LangGraph nightly graph producing per-ticker research briefs.
-- *Data pipelines* → `data.py` + `store.py` + scheduled runs.
-- *Agentic frameworks (LangGraph)* → `graph.py`.
-- *Model-provider APIs (Anthropic)* → narrative + divergence via Claude.
-- *MCP for tool/data integration* → `mcp_server.py`.
-- *Traceable reasoning + evaluation* → grounded briefs + the eval harness + the immutable log.
-- *Explaining trade-offs to PMs* → the brief format + the posts themselves.
-- *Bias to shipping* → it runs unattended for a month and produces a results post.
+- **Agentic workflows / research automation** → the triage + post-mortem loop automates the analyst's daily forecast-review cycle.
+- **Agentic frameworks (LangGraph)** → three graphs with real state, branching, and loops.
+- **Data pipelines** → the deterministic panel + forecast cache + grading.
+- **Model-provider APIs (Anthropic)** → the agents run on Claude.
+- **MCP for tool/data integration** → the watchlist and `why_did_we_flag(...)` exposed as MCP tools.
+- **Traceable reasoning + evaluation** → the critic loop; every claim tied to a number; a real eval harness with planted cases and an ablation.
+- **Explaining trade-offs to PMs** → the morning brief *is* the PM artifact.
+- **Bias to shipping** → the loop runs (replay or live) and produces dated, accumulating artifacts.
+- **Judgment about where agents belong** → the forecaster is deliberately *not* an agent, and the plan says why.
 
 ---
 
-## 14. Open items (need your call)
+## 14. Risks
 
-1. **Divergence v1** — accept §6 as the starting definition, or adjust before chunk 4?
-2. **Case-study set** — exemplar is NVDA earnings (narrative's easy case). Proposed partners: one **no-catalyst** day (does narrative just add noise?) and one **narrative head-fake** (headlines screamed, stock did the opposite). OK to hunt for those two?
-3. **MCP** — build the MCP server this round, or defer to post-1-ship as a "future work" hook?
-
----
-
-## 15. Risks
-
-- **Small n** — mitigated by framing as a pilot + reporting CIs.
-- **Scheduled catalysts favor narrative trivially** — mitigated by including non-catalyst and head-fake cases.
-- **yfinance breakage mid-run** — mitigated by Stooq fallback + cache.
-- **Laptop misses runs** — mitigated by logging coverage; cloud lift if severe.
-- **LLM narrative leakage of price** — mitigated by strict price-blind prompt + logging exactly what the agent saw.
+- **"Interesting" is fuzzy** → pin it to measurable proxies (strength, strength-z, cluster agreement, analog dispersion) and let the agent *rank and explain* within that, not invent criteria. Eventfulness eval keeps it honest.
+- **Memory adds noise, not signal** → the ablation is designed to catch exactly this; if memory-off wins, that's a reportable finding.
+- **Setup labels too coarse/fine** → start with 7, adjust once the analog and memory retrieval have real data behind them.
+- **Kronos systematically biased** (mild positive lean at 120 bars) → grade in quantile terms, not just direction; report the bias.
+- **Replay window regime-specific** → pick a window spanning at least one vol spike; note it.
+- **Agent cost** → deterministic core does the heavy compute; LLM only touches ~7 names/day for triage + the surprises for post-mortem. Budget-capped per run.
 
 ---
 
-## 16. Build session 2026-08-29 — decisions & refinements
+## 15. Open items — RESOLVED 2026-08-29
 
-**Open items from §14, resolved:**
-
-| # | Resolution |
-|---|-----------|
-| 14.1 | Divergence v1 **accepted** with concrete thresholds now in `src/config.py`: directional needs conviction ≥ 4; magnitude needs conviction ≥ 7 **and** `P(return in narrative's direction) < 0.30` under Kronos. |
-| 14.2 | 3 case studies (NVDA exemplar + one no-catalyst + one head-fake). Headlines fed **verbatim, not scrubbed** — see §5a. |
-| 14.3 | **MCP built this round** — `src/mcp_server.py` exposes `get_kronos_distribution`, `get_headlines`, `get_narrative_score`, `get_signal`. |
-
-**§5a — the price-blindness caveat (new, important).**
-Scrubbing price mentions from headlines does *not* make a historical case study
-truly price-blind: Claude may carry the realised outcome in its training data, and
-that is undetectable. So we don't scrub. Instead every signal row carries
-`llm_contaminated` = (`asof` ≤ knowledge cutoff). Case studies are **illustration**;
-the **live run** (all dates after the cutoff) is the actual test. Stated plainly in
-post 1.
-
-**Ticker universe (LOCKED):** AAPL, MSFT, NVDA, AMZN, GOOGL, META, TSLA, AMD,
-NFLX, AVGO, JPM, XOM.
-
-**Scheduling (LOCKED): GitHub Actions is primary**, launchd is a local backup.
-Cloud cron removes the laptop-sleep risk class entirely; committing `log/` back
-each run makes git history the tamper-evidence. `scheduling/*.plist` kept for
-local use. Replaces most of §10's mitigation burden.
-
-**Immutable log — refinement of §8.** Source of truth is now an append-only
-**JSONL** (`log/signals.jsonl`, `log/actuals.jsonl`) with a per-row SHA-256 hash
-chained off the previous row. `narb.db` is a disposable SQLite mirror rebuilt from
-the JSONL (`python -m src.store sync`). A `--replace` re-lock appends a superseding
-row; the queryable view takes last-per-key while the chain still covers every line.
-
-**Evaluation timing — refinement of §7/§10.** Grade the **morning after** the
-session (~09:45 ET), not 16:15 ET, so Yahoo's consolidated official close is
-settled.
-
-**Data sourcing note.** Yahoo now 429s the stdlib user agent; we hit the chart
-API through `curl_cffi` (browser TLS impersonation) and adjust OHLC by
-`adjclose/close`. Stooq fallback is best-effort (JS-challenged from some IPs).
-
-**Reproducibility.** Kronos seed is `sha256(ticker|asof)` — stable across
-processes (Python's builtin `hash()` is per-process salted). Verified identical
-output across runs on MPS. `.eval()` on model+tokenizer is required on MPS (SDPA
-rejects a non-zero `dropout_p`).
-
-**Environment.** Project-local `.venv` (pinned `requirements.txt`), not the
-anaconda base env — keeps `huggingface_hub==0.33.1` (Kronos's pin) isolated and
-the user's base jupyter untouched. `scripts/setup.sh` is idempotent.
-
-**Notebooks (new deliverables):**
-- `notebooks/walkthrough.ipynb` — one ticker, one day, every stage explained in
-  detail. Regenerable via `notebooks/_build_walkthrough.py`.
-- `notebooks/case_nflx_2024-04-19.ipynb` — head-fake (both signals fooled).
-- `notebooks/case_jpm_2025-06-11.ipynb` — no-catalyst day.
-- Case notebooks regenerable via `notebooks/_build_case.py`.
-
-**Kronos lookback — a finding, not a config choice.** Feeding the full ~400–512
-daily bars destabilises the AR sampler for names trading near the high/low of the
-window (normalised last price → multi-sigma → hard reversion; medians of −3 to
-−8%, tails past −30%). **`LOOKBACK_BARS = 120`** (~6 months) is the stable
-operating point across all 12 tickers; mid-range names were unaffected either way.
-Reported in post 2's calibration section.
-
-**Case-study results (run 2026-08-29, lookback 120, 200 paths):**
-
-| case | actual | Kronos median | 5–95 | narrative | verdict | inside? |
-|---|---|---|---|---|---|---|
-| NVDA 2025-05-29 (catalyst) | +3.25% | +1.79% | [−0.97, +5.31] | bull/7 | aligned | yes |
-| NFLX 2024-04-19 (head-fake) | **−9.09%** | +1.13% | [−1.59, +3.97] | bull/7 | aligned | **no** |
-| JPM 2025-06-11 (no-catalyst) | −0.17% | +0.33% | [−1.48, +1.98] | neutral/1 | aligned | yes |
-
-None of the three produced a divergence — on "obvious" days the two views tend to
-agree. NFLX is a double miss (both bullish, stock gapped down through the
-envelope floor): the scorer's own rationale named the disclosure red flag and
-still weighted the beat higher.
+1. **Replay window** — `2025-05-01 → 2025-08-01` (spans the tariff-truce melt-up and the summer chop). LOCKED as D1/§3.
+2. **Universe size** — expand to **~40 names now**; dev on an 8-name subset (`DEV_UNIVERSE`). LOCKED as D4.
+3. **Repo rename** — folder → `foundation_model_desk` (done). GitHub repo rename to match is pending (auto-redirects; not blocking).
+4. **Live deployment** — build the scheduled jobs this round (`.github/workflows/`, `scheduling/`), replay stays the default mode.

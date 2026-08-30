@@ -1,71 +1,88 @@
-# Daily Narrative Arbitrage — pilot
+# Forecast Desk
 
-Each pre-market open, build two independent views of the trading day and log where
-they disagree:
+An agentic research loop wrapped around a probabilistic price forecaster.
 
-- **Structure** — [Kronos](https://github.com/shiyu-coder/Kronos), a foundation
-  model over tokenised K-lines, run as a **distribution** (200 sampled paths),
-  seeing only price/volume history strictly before `asof`.
-- **Narrative** — Claude scoring overnight headlines, **price-blind**.
+**Kronos** (a small foundation model over tokenised K-lines) produces a return
+distribution per name per day. That distribution is a *number*, not a view. This
+project is the loop a junior analyst runs around such a forecast:
 
-Grade at the close: was the actual return inside Kronos's 5–95 envelope? Which
-side called the direction? On divergence days, which side won?
+- **Pre-market** — a **triage agent** ranks ~40 large-caps by how unusual today's
+  forecast is *for that name*, investigates the top candidates (setup, analog
+  base rate, correlated-cluster read, desk-memory track record), and briefs the
+  few worth a human's morning. A **groundedness critic** signs off every number
+  in every brief.
+- **Post-close** — a **post-mortem agent** grades what settled and classifies
+  *why* each watchlist name and each tail surprise happened:
+  `within-expected-dispersion | catalyst:<type> | regime-move | data-issue | unexplained`.
+- The post-mortem writes **desk memory** (append-only episodes + a derived
+  per-(ticker, setup) stat table). The next morning's triage reads it back — so
+  the loop learns this desk's track record with the model **without ever
+  retraining the model**.
 
-**No trades, no PnL, no alpha claim.** It's a pilot — ~20 trading days × 12
-tickers ≈ 240 signal-days, logged immutably, evaluated with honest confidence
-intervals. Full rationale in [`PLAN.md`](PLAN.md).
+The forecasting pipeline is deterministic infrastructure — a scheduled job, not
+an agent. The agentic work is the layer on top: *what is worth looking at* and
+*what did we just learn*.
+
+**No trades, no PnL, no alpha claim.** See [`PLAN.md`](PLAN.md) for the full
+rationale, scope, and non-goals.
 
 ---
 
 ## Quick start
 
 ```bash
-scripts/setup.sh                       # venv + deps + Kronos weights
-cp .env.example .env                   # add ANTHROPIC_API_KEY (optional; mock mode without)
-.venv/bin/python -m src.graph --asof 2025-05-29 --tickers NVDA
+scripts/setup.sh                      # venv + deps + vendored Kronos + weights
+cp .env.example .env                  # add ANTHROPIC_API_KEY (mock mode without)
+
+# 1. build the deterministic forecast cache for the replay window
+.venv/bin/python -m src.forecasts --start 2025-05-01 --end 2025-08-01
+
+# 2. replay the whole loop day by day (memory accumulates)
+.venv/bin/python -m src.run_daily replay --skip-forecast
+
+# 3. read the evaluation
+.venv/bin/python -m eval.evaluate
 ```
 
-Then open the notebooks:
+A single live session is two cron jobs:
 
 ```bash
-.venv/bin/jupyter lab notebooks/
+.venv/bin/python -m src.run_daily premarket --asof 2025-05-29    # forecasts + triage
+.venv/bin/python -m src.run_daily postclose --asof 2025-05-28    # grade + post-mortem
 ```
 
-- **`walkthrough.ipynb`** — the whole pipeline for one ticker/day, every stage
-  explained: no-lookahead cut, raw Kronos paths, fan chart, headline sub-agent
-  trace, narrative score, divergence brief, immutable write, close-of-day grade.
-- **`case_nflx_2024-04-19.ipynb`** — narrative head-fake: a strong earnings print,
-  both signals bullish, stock −9%.
-- **`case_jpm_2025-06-11.ipynb`** — a no-catalyst day: narrative correctly
-  abstains.
-
-Rebuild any of them with `python notebooks/_build_walkthrough.py` /
-`python notebooks/_build_case.py all`.
+Outputs land in `log/` (`forecasts.jsonl`, `watchlist.jsonl`, `actuals.jsonl`,
+`brief_<asof>.md`) and `memory/` (`episodes.jsonl`, `stats.json`), all
+append-only and hash-chained — git history of those files is the tamper-evidence.
 
 ---
 
 ## Layout
 
 ```
-PLAN.md                     the research plan (decisions, scope, non-goals)
+PLAN.md                     the research plan (decisions, scope, evaluation)
 src/
-  config.py                 universe, paths, model params, divergence thresholds
-  data.py                   prices + strict no-lookahead rule (Yahoo→Stooq→cache)
-  kronos_infer.py           sample_paths(): Kronos WITH dispersion + fan chart
-  headlines_agent.py        LangGraph headline sub-agent (price-blind)
-  narrative.py              structured price-blind scorer (Claude tool-use)
-  divergence.py             deterministic classification + LLM PM brief
-  graph.py                  the nightly signal LangGraph
-  evaluate.py               post-close grading LangGraph + running report
-  store.py                  append-only JSONL log w/ hash chain + SQLite mirror
-  run_nightly.py            scheduler entrypoint (signal | evaluate)
-  mcp_server.py             the two capabilities exposed as MCP tools
-notebooks/walkthrough.ipynb one signal-day, end to end
-case_studies/               worked examples (curated + cited headlines)
-log/signals.jsonl           the immutable signal log (tracked; git = tamper-evidence)
-scheduling/                 launchd plists (local backup scheduler)
-.github/workflows/          GitHub Actions nightly (primary scheduler)
-tests/                      offline tests for the deterministic pieces
+  config.py                 universe, paths, model + loop params — one file
+  data.py                   prices + strict no-lookahead (Yahoo -> Stooq -> cache)
+  kronos_infer.py           sample_paths(): Kronos WITH dispersion restored
+  forecasts.py              deterministic Kronos batch -> immutable forecast cache
+  setups.py                 technical features + controlled-vocab label + analogs
+  features.py               cross-sectional ranking, strength-z, correlated cluster
+  grade.py                  actual close -> quantile position, coverage, direction
+  triage.py                 the pre-market triage agent (LangGraph)
+  critic.py                 groundedness critic (deterministic + LLM passes)
+  postmortem.py             the post-close post-mortem agent (LangGraph)
+  memory.py                 desk memory: episodes + derived stats + recall()
+  store.py                  append-only JSONL + hash chain + SQLite mirror
+  llm.py                    shared Anthropic client + JSON/text helpers
+  run_daily.py              premarket | postclose | replay
+  mcp_server.py             the watchlist + why-flagged tools over MCP
+eval/
+  build_catalysts.py        scheduled-event calendar (Nasdaq + curated macro)
+  evaluate.py               the metrics harness
+notebooks/
+  walkthrough.ipynb         one asof end to end
+  loop_replay.ipynb         N days replayed; the memory ablation
 ```
 
 ## The one non-obvious thing
@@ -73,20 +90,15 @@ tests/                      offline tests for the deterministic pieces
 `KronosPredictor.predict(sample_count=N)` runs N sampled paths and then
 **averages them** (`np.mean(preds, axis=1)`) before returning — a smoothed mean
 line with zero dispersion. `src/kronos_infer.py::_auto_regressive_paths` is the
-identical batched inference returning the array *before* the mean. That's the
-whole envelope.
-
-## Going live
-
-1. Create a GitHub repo, push, add `ANTHROPIC_API_KEY` as an Actions secret.
-2. The workflow in `.github/workflows/nightly.yml` runs `signal` ~08:45 ET and
-   `evaluate` ~09:45 ET next morning, committing `log/` back each run. Git
-   history of `log/signals.jsonl` is the immutable record.
-3. Local alternative: `cp scheduling/*.plist ~/Library/LaunchAgents/ && launchctl load …`
-   (subject to the laptop-sleep caveat in `PLAN.md §10`).
+identical batched inference returning the array *before* the mean. That is the
+whole envelope, and the envelope is the whole point.
 
 ## Tests
 
 ```bash
 .venv/bin/python -m pytest -q
 ```
+
+Offline only — no network, no LLM, no Kronos. Covers the hash chain, row
+immutability, the no-lookahead rule, the setup vocabulary, and the grade-quantile
+interpolation.

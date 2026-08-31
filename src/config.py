@@ -20,13 +20,29 @@ NB_OUT = ROOT / "notebooks" / "_out"
 for _d in (DAILY_CACHE, HOURLY_CACHE, FORECAST_STORE, NB_OUT):
     _d.mkdir(parents=True, exist_ok=True)
 
-# --- universe (LOCKED once chosen in W1) ---------------------------------
-# ~30 US large-caps: top market cap, options-liquid, >=5y history, sector-spread.
+# --- universe (LOCKED 2026-08-31) --------------------------------------
+# 30 US large-caps. Screen (research/universe_screen.py): trailing-year median
+# dollar volume >= $300M/day AND worst day >= $50M, continuous history from 2018,
+# then hand-balanced for sector spread and volatility dispersion.
 UNIVERSE: list[str] = [
-    "AAPL", "MSFT", "NVDA", "GOOGL", "AMZN", "META", "AVGO", "AMD", "NFLX",
-    "ORCL", "CRM", "ADBE", "CSCO", "QCOM", "TXN", "INTC",
-    "JPM", "BAC", "WFC", "GS", "MS", "V", "MA",
-    "UNH", "JNJ", "LLY", "MRK", "XOM", "CVX", "CAT",
+    # tech / semis / software
+    "AAPL", "MSFT", "NVDA", "AMD", "MU", "CRM",
+    # communication services
+    "GOOGL", "META", "NFLX",
+    # consumer discretionary
+    "AMZN", "TSLA", "HD", "MCD",
+    # consumer staples
+    "WMT", "COST", "PG",
+    # financials
+    "JPM", "BAC", "GS", "V",
+    # health care
+    "UNH", "LLY", "JNJ", "MRK",
+    # energy
+    "XOM", "CVX",
+    # industrials
+    "CAT", "BA",
+    # materials / utilities
+    "LIN", "NEE",
 ]
 DEV_UNIVERSE = ["AAPL", "MSFT", "NVDA", "AMD", "JPM", "XOM", "NFLX", "TSLA"]  # probe set
 

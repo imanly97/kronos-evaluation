@@ -27,5 +27,4 @@ Kronos.from_pretrained("NeoQuasar/Kronos-small")
 print("   weights ready")
 PY
 
-[ -f .env ] || { cp .env.example .env; echo "   wrote .env (add your ANTHROPIC_API_KEY)"; }
-echo "done. try:  .venv/bin/python -m src.graph --asof 2025-05-29 --tickers NVDA"
+echo "done. try:  .venv/bin/python -m pytest -q"

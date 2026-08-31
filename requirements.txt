@@ -1,4 +1,4 @@
-# Forecast Desk — pinned deps.
+# Kronos evaluation — pinned deps.
 # Installed into a project-local .venv (see README) so the anaconda base env
 # and its jupyter stay untouched.
 
@@ -7,7 +7,7 @@ numpy==1.26.4
 pandas==2.2.3
 scipy==1.13.1
 
-# --- Kronos (structural forecaster) ---
+# --- Kronos (frozen forecaster) ---
 torch>=2.2
 einops==0.8.1
 huggingface_hub==0.33.1
@@ -15,27 +15,17 @@ safetensors==0.6.2
 tqdm==4.67.1
 
 # --- prices ---
-# We hit Yahoo's chart API directly through curl_cffi (browser TLS impersonation)
-# because Yahoo now 429s the stdlib/requests user agent. yfinance is kept only as
-# a secondary parser path.
+# Yahoo's chart API directly through curl_cffi (browser-TLS impersonation) —
+# the stdlib/requests UA gets 429'd. yfinance kept as a secondary parser path.
 curl_cffi==0.7.4
 yfinance==0.2.51
 # Stooq fallback is a plain CSV URL fetch — no extra dep.
 
-# --- agents (LLM) ---
-anthropic==0.68.0
-langgraph==0.2.60
-langchain-core==0.3.29
-langchain-anthropic==0.3.1
+# --- evaluation ---
+statsmodels==0.14.2      # HAC / Newey-West SEs, Diebold-Mariano, regressions
+arch==7.0.0              # GARCH(1,1), GJR-GARCH baselines
 
-# --- MCP server ---
-mcp==1.2.0
-
-# --- plumbing ---
-python-dotenv==1.0.1
-pydantic==2.10.4
-
-# --- charts + notebook ---
+# --- charts + notebooks ---
 matplotlib==3.9.3
 jupyterlab==4.3.4
 ipykernel==6.29.5

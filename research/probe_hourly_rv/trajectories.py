@@ -22,7 +22,7 @@ ROOT = Path("/Users/isaac/Desktop/foundation_model_desk")
 sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "vendor_kronos"))
 
-from src.kronos_infer import _auto_regressive_paths, load_predictor  # noqa: E402
+from src.kronos import _auto_regressive_paths, load_predictor  # noqa: E402
 from model.kronos import calc_time_stamps  # noqa: E402
 
 DATA = Path(__file__).parent / "data"

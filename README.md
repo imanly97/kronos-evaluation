@@ -1,104 +1,73 @@
-# Forecast Desk
+# Evaluating Kronos for equity price forecasting
 
-An agentic research loop wrapped around a probabilistic price forecaster.
+Does [Kronos](https://github.com/shiyu-coder/Kronos) — an open-source foundation
+model for financial candlesticks — have genuine, baseline-beating forecasting
+skill on US equities? This repo is a rigorous, reproducible answer: a **map** of
+where it works and where it fails, across horizon, frequency, target (realised
+volatility / distribution calibration / return direction) and regime, against the
+right classical baseline in each cell, with the statistics to defend it.
 
-**Kronos** (a small foundation model over tokenised K-lines) produces a return
-distribution per name per day. That distribution is a *number*, not a view. This
-project is the loop a junior analyst runs around such a forecast:
+Kronos is a **frozen input** — no training, no fine-tuning.
 
-- **Pre-market** — a **triage agent** ranks ~40 large-caps by how unusual today's
-  forecast is *for that name*, investigates the top candidates (setup, analog
-  base rate, correlated-cluster read, desk-memory track record), and briefs the
-  few worth a human's morning. A **groundedness critic** signs off every number
-  in every brief.
-- **Post-close** — a **post-mortem agent** grades what settled and classifies
-  *why* each watchlist name and each tail surprise happened:
-  `within-expected-dispersion | catalyst:<type> | regime-move | data-issue | unexplained`.
-- The post-mortem writes **desk memory** (append-only episodes + a derived
-  per-(ticker, setup) stat table). The next morning's triage reads it back — so
-  the loop learns this desk's track record with the model **without ever
-  retraining the model**.
+Full plan, methodology, and splits: [`PLAN.md`](PLAN.md).
 
-The forecasting pipeline is deterministic infrastructure — a scheduled job, not
-an agent. The agentic work is the layer on top: *what is worth looking at* and
-*what did we just learn*.
+## What we know so far (the pilot)
 
-**No trades, no PnL, no alpha claim.** See [`PLAN.md`](PLAN.md) for the full
-rationale, scope, and non-goals.
+`research/probe_hourly_rv/` — 8 names, 960 forecasts, out of sample:
 
----
+- **No directional skill** on daily bars (49.5% sign hit vs 54.6% base rate).
+- **Modest realised-vol skill** on hourly bars — +0.05 incremental log-RV R² over
+  EWMA (bootstrap CI excludes zero); edge concentrated on high-vol names and
+  turbulent regimes.
+- **Miscalibrated on level** (biased low); a cheap affine recalibration fixes it.
+- **Overconfident intervals** (daily 90% band covers ~78%).
+- Big misses cluster on **price gaps** — news/earnings the price-only model can't
+  see. Deferred to a follow-up study.
+
+See [`notebooks/probe_findings.ipynb`](notebooks/probe_findings.ipynb).
+
+## Splits
+
+Kronos-small pretraining ends **~June 2024** (arXiv:2508.02739). The splits
+control *our* methodology overfitting, not the model's:
+
+| window | dates | use |
+|---|---|---|
+| contaminated | ≤ 2024-06-30 | daily only; measure the contamination gap |
+| OOS-development | 2024-07-01 → 2025-12-31 | all methodology choices |
+| OOS-lockbox | 2026-01-01 → 2026-08-31 | run once, report |
 
 ## Quick start
 
 ```bash
-scripts/setup.sh                      # venv + deps + vendored Kronos + weights
-cp .env.example .env                  # add ANTHROPIC_API_KEY (mock mode without)
-
-# 1. build the deterministic forecast cache for the replay window
-.venv/bin/python -m src.forecasts --start 2025-05-01 --end 2025-08-01
-
-# 2. replay the whole loop day by day (memory accumulates)
-.venv/bin/python -m src.run_daily replay --skip-forecast
-
-# 3. read the evaluation
-.venv/bin/python -m eval.evaluate
+scripts/setup.sh                       # venv + deps + vendored Kronos + weights
+.venv/bin/python -m pytest -q          # no-lookahead + metric sanity tests
 ```
-
-A single live session is two cron jobs:
-
-```bash
-.venv/bin/python -m src.run_daily premarket --asof 2025-05-29    # forecasts + triage
-.venv/bin/python -m src.run_daily postclose --asof 2025-05-28    # grade + post-mortem
-```
-
-Outputs land in `log/` (`forecasts.jsonl`, `watchlist.jsonl`, `actuals.jsonl`,
-`brief_<asof>.md`) and `memory/` (`episodes.jsonl`, `stats.json`), all
-append-only and hash-chained — git history of those files is the tamper-evidence.
-
----
 
 ## Layout
 
 ```
-PLAN.md                     the research plan (decisions, scope, evaluation)
+PLAN.md                     the study plan (questions, methodology, splits)
+docs/PLAN_v1_agentic_desk.md the archived prior direction
 src/
-  config.py                 universe, paths, model + loop params — one file
-  data.py                   prices + strict no-lookahead (Yahoo -> Stooq -> cache)
-  kronos_infer.py           sample_paths(): Kronos WITH dispersion restored
-  forecasts.py              deterministic Kronos batch -> immutable forecast cache
-  setups.py                 technical features + controlled-vocab label + analogs
-  features.py               cross-sectional ranking, strength-z, correlated cluster
-  grade.py                  actual close -> quantile position, coverage, direction
-  triage.py                 the pre-market triage agent (LangGraph)
-  critic.py                 groundedness critic (deterministic + LLM passes)
-  postmortem.py             the post-close post-mortem agent (LangGraph)
-  memory.py                 desk memory: episodes + derived stats + recall()
-  store.py                  append-only JSONL + hash chain + SQLite mirror
-  llm.py                    shared Anthropic client + JSON/text helpers
-  run_daily.py              premarket | postclose | replay
-  mcp_server.py             the watchlist + why-flagged tools over MCP
-eval/
-  build_catalysts.py        scheduled-event calendar (Nasdaq + curated macro)
-  evaluate.py               the metrics harness
-notebooks/
-  walkthrough.ipynb         one asof end to end
-  loop_replay.ipynb         N days replayed; the memory ablation
+  kronos.py                 the dispersion-preserving sampler (the only Kronos code we own)
+  data.py                   no-lookahead price loader (daily + hourly)
+  config.py                 paths, universe, splits, model params
+  targets.py                RV / direction / quantile target construction     [W1]
+  baselines.py              EWMA, HAR-RV, GARCH, RW — all walk-forward         [W1]
+  forecast.py               run Kronos over a grid of origins -> forecast store [W1]
+  metrics.py                QLIKE, pinball, CRPS, PIT, MZ, Diebold–Mariano, MCS [W1]
+  recalibrate.py            the expanding-window affine layer                  [W2]
+  evaluate.py               the harness                                        [W2]
+research/probe_hourly_rv/   the pilot study
+notebooks/                  01_data … 05_mechanism
+report/findings.md          the writeup
 ```
 
 ## The one non-obvious thing
 
 `KronosPredictor.predict(sample_count=N)` runs N sampled paths and then
-**averages them** (`np.mean(preds, axis=1)`) before returning — a smoothed mean
-line with zero dispersion. `src/kronos_infer.py::_auto_regressive_paths` is the
-identical batched inference returning the array *before* the mean. That is the
-whole envelope, and the envelope is the whole point.
-
-## Tests
-
-```bash
-.venv/bin/python -m pytest -q
-```
-
-Offline only — no network, no LLM, no Kronos. Covers the hash chain, row
-immutability, the no-lookahead rule, the setup vocabulary, and the grade-quantile
-interpolation.
+**averages them** before returning — a smoothed mean line, zero dispersion.
+`src/kronos.py::_auto_regressive_paths` is the identical batched inference
+returning the array *before* the mean. That is the entire predictive
+distribution, and the distribution is what we're evaluating.

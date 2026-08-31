@@ -29,14 +29,17 @@ DATA = Path(__file__).parent / "data"
 LOOKBACK, HORIZON, SAMPLES = 400, 6, 200
 FEAT = ["open", "high", "low", "close", "volume", "amount"]
 
-# picked from probe_results: a calm and a turbulent origin for a few names
+# hero cases (from probe_results) + a few for the overview grid
 PICKS = [
-    ("NVDA", "2025-01-27 10:30"),   # DeepSeek selloff week
-    ("NVDA", "2025-06-10 12:30"),   # quiet
-    ("TSLA", "2025-03-10 11:30"),   # turbulent
-    ("AAPL", "2025-04-07 10:30"),   # tariff crash
-    ("XOM",  "2025-05-19 13:30"),   # quiet
-    ("AMD",  "2025-02-05 09:30"),   # earnings-week
+    # GOOD: Kronos sees vol has normalised; EWMA still anchored to the tariff-crash spike
+    ("AMD",  "2025-04-11 11:30"),   # realised 0.0117  kronos 0.0106  ewma 0.0310
+    ("NVDA", "2025-04-11 11:30"),   # realised 0.0070  kronos 0.0108  ewma 0.0256
+    # BAD: scheduled catalyst invisible to a price-only model
+    ("TSLA", "2025-07-23 11:30"),   # Q2 earnings that evening. realised 0.0413  kronos 0.0057
+    ("NVDA", "2025-01-24 15:30"),   # DeepSeek weekend. realised 0.0607  kronos 0.0062
+    # overview
+    ("XOM",  "2025-05-19 13:30"),
+    ("AAPL", "2025-04-07 10:30"),
 ]
 
 
@@ -59,12 +62,18 @@ def one(pred, df: pd.DataFrame, origin: pd.Timestamp) -> dict | None:
     seq = np.concatenate([np.full((close.shape[0], 1), last), close], axis=1)
     rv = float(np.median(np.diff(np.log(np.clip(seq, 1e-6, None)), axis=1).std(axis=1)))
     real_rv = float(np.log(fut["close"]).diff().dropna().std())
+    # EWMA(0.94) RV as of the origin, for comparison on the chart
+    hr = np.log(ctx["close"]).diff().dropna().to_numpy()
+    v = 0.0
+    for r in hr:
+        v = 0.94 * v + 0.06 * r * r
+    ewma_rv = float(np.sqrt(v))
     return {
         "ticker": df.attrs.get("ticker", "?"), "origin": df.index[i],
         "ctx_close": ctx["close"].iloc[-60:],
         "paths": close, "actual": fut["close"].to_numpy(),
         "y_index": pd.DatetimeIndex(fut.index),
-        "kronos_rv": rv, "realized_rv": real_rv,
+        "kronos_rv": rv, "realized_rv": real_rv, "ewma_rv": ewma_rv,
     }
 
 

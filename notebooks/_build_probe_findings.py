@@ -243,112 +243,177 @@ spikes earlier and closer than blue; on MSFT / JPM the two are interchangeable.
 EWMA is visibly a lagged, smoothed version of realised RV — it can't lead a
 regime change, which is where Kronos's incremental R² comes from.""")
 
-    md("""## 8 · What Kronos is actually doing — sample-path fans
+    md("""## 8 · What Kronos is actually doing — two forecasts, up close
 
-Six forecast origins (regenerated with the full 200 sample paths), drawn against
-the realised next-session path.""")
+The **width of the fan** is Kronos's RV forecast. The dashed blue cone is what
+EWMA implied at the same moment. The crimson line is what actually happened.
+Everything is % return from the forecast origin (the fan spread *is* the vol).""")
     code("""import pickle
-traj = pickle.load(open("research/probe_hourly_rv/data/trajectories.pkl", "rb"))
-fig, axes = plt.subplots(2, 3, figsize=(15, 7))
-for ax, t in zip(axes.flat, traj):
-    ctx = t["ctx_close"]; yi = t["y_index"]; P = t["paths"]
-    ax.plot(range(-len(ctx), 0), ctx.values, c="#333", lw=1.3)
-    xf = range(0, len(yi))
-    for row in P[:60]:
-        ax.plot(xf, row, c="tab:blue", alpha=.05, lw=.8)
-    q = np.percentile(P, [5, 25, 50, 75, 95], axis=0)
-    ax.fill_between(xf, q[0], q[4], color="tab:blue", alpha=.15)
+traj = {(t["ticker"], pd.Timestamp(t["origin"]).strftime("%Y-%m-%d")): t
+        for t in pickle.load(open("research/probe_hourly_rv/data/trajectories.pkl", "rb"))}
+
+def draw(ax, t, title, note, note_xy=(0.02, 0.03), note_va="bottom"):
+    ctx = t["ctx_close"].iloc[-24:]; last = float(t["ctx_close"].iloc[-1])
+    P = 100*(t["paths"]/last - 1); act0 = np.r_[0.0, 100*(np.asarray(t["actual"])/last - 1)]
+    c0 = 100*(ctx.values/last - 1)
+    xf = np.arange(0, P.shape[1]+1)                       # include the origin (0,0)
+    Pz = np.c_[np.zeros(len(P)), P]
+    ax.plot(np.arange(-len(c0)+1, 1), c0, c="#333", lw=1.4)
+    for row in Pz[:100]:
+        ax.plot(xf, row, c="tab:blue", alpha=.035, lw=.8)
+    q = np.percentile(Pz, [5, 25, 50, 75, 95], axis=0)
+    ax.fill_between(xf, q[0], q[4], color="tab:blue", alpha=.15, label="Kronos 5–95%")
     ax.fill_between(xf, q[1], q[3], color="tab:blue", alpha=.25)
-    ax.plot(xf, q[2], c="tab:blue", lw=1.4, label="Kronos median")
-    ax.plot(xf, t["actual"], c="crimson", lw=1.8, marker="o", ms=3, label="realised")
-    ax.axvline(-0.5, c="k", lw=.6, ls=":")
-    ax.set_title(f"{t['ticker']}  {pd.Timestamp(t['origin']).strftime('%Y-%m-%d %H:%M')}\\n"
-                 f"Kronos RV {t['kronos_rv']:.3f}  ·  realised {t['realized_rv']:.3f}", fontsize=9)
-axes.flat[0].legend(fontsize=8)
+    ax.plot(xf, q[2], c="tab:blue", lw=1.5)
+    cone = np.r_[0.0, 100 * 1.645 * t["ewma_rv"] * np.sqrt(np.arange(1, P.shape[1]+1))]
+    ax.plot(xf,  cone, c="tab:blue", ls="--", lw=1.2, label="EWMA 90% cone")
+    ax.plot(xf, -cone, c="tab:blue", ls="--", lw=1.2)
+    ax.plot(xf, act0, c="crimson", lw=2.4, marker="o", ms=4, label="realised", zorder=5)
+    ax.axvline(0, c="k", lw=.7, ls=":"); ax.axhline(0, c="#bbb", lw=.6)
+    ax.set_title(title, fontsize=11, loc="left")
+    ax.set_xlabel("hours from forecast origin"); ax.set_ylabel("% return from origin")
+    ax.text(*note_xy, note, transform=ax.transAxes, fontsize=8.5, va=note_va,
+            bbox=dict(boxstyle="round", fc="#fffbe6", ec="#e0d080"))
+
+fig, ax = plt.subplots(1, 2, figsize=(15, 5.2))
+g = traj[("AMD", "2025-04-11")]
+draw(ax[0], g, "GOOD — AMD, 11 Apr 2025",
+     f"One week after the tariff crash. EWMA still pricing the spike\\n"
+     f"(RV {g['ewma_rv']*1e4:.0f}bp → ±{1.645*g['ewma_rv']*np.sqrt(6)*100:.1f}%). "
+     f"Kronos sees vol has normalised\\n(RV {g['kronos_rv']*1e4:.0f}bp). "
+     f"Realised {g['realized_rv']*1e4:.0f}bp — Kronos nails it, EWMA 3× too wide.")
+b = traj[("TSLA", "2025-07-23")]
+draw(ax[1], b, "BAD — TSLA, 23 Jul 2025",
+     f"Q2 earnings that evening — a scheduled event invisible to a price-only\\n"
+     f"model. Kronos RV {b['kronos_rv']*1e4:.0f}bp (calm), EWMA similar. "
+     f"Realised {b['realized_rv']*1e4:.0f}bp:\\nthe stock gapped out of every "
+     f"envelope. This is why the desk needs a catalyst calendar.",
+     note_xy=(0.02, 0.97), note_va="top")
+ax[0].legend(loc="upper left", fontsize=8)
 plt.tight_layout(); plt.show()""")
-    md("""The **width of the fan** is Kronos's RV forecast; the median path is
-close to flat (no directional view, as expected). Where realised RV >> Kronos RV,
-the crimson path breaks out of the envelope — the calibration gap from §1/§4.""")
+    md("""The good case is Kronos's actual edge over EWMA: **not** being fooled by
+a stale volatility spike. The bad case is its hard limit: it forecasts vol from
+price structure, so a scheduled catalyst (or a weekend news shock — see the NVDA
+/ DeepSeek panel below) is simply not in its inputs.""")
+    code("""# the rest, compact
+fig, axes = plt.subplots(1, 4, figsize=(16, 3.4))
+rest = [("NVDA","2025-04-11"), ("NVDA","2025-01-24"), ("XOM","2025-05-19"), ("AAPL","2025-04-07")]
+for ax, key in zip(axes, rest):
+    t = traj[key]; last = float(t["ctx_close"].iloc[-1])
+    P = 100*(t["paths"]/last-1); act = 100*(np.asarray(t["actual"])/last-1)
+    xf = np.arange(1, P.shape[1]+1)
+    q = np.percentile(P, [5,50,95], axis=0)
+    ax.fill_between(xf, q[0], q[2], color="tab:blue", alpha=.18)
+    ax.plot(xf, q[1], c="tab:blue", lw=1.2)
+    ax.plot(xf, act, c="crimson", lw=2, marker="o", ms=3)
+    ax.axhline(0, c="#bbb", lw=.6)
+    tag = "hit" if abs(t["kronos_rv"]-t["realized_rv"]) < 0.4*t["realized_rv"] else "miss"
+    ax.set_title(f"{key[0]} {key[1]}  ({tag})\\nK {t['kronos_rv']*1e4:.0f} / real {t['realized_rv']*1e4:.0f} bp", fontsize=9)
+plt.tight_layout(); plt.show()""")
 
-    md("""## 9 · Does a Kronos forecast improve volatility targeting?
+    md("""## 9 · Can a Kronos forecast improve a vol-targeting strategy's Sharpe?
 
-The concrete use case. Vol targeting sets position size `w = c / σ̂` so that
-*delivered* risk `w · σ_realised` stays constant. A better `σ̂` → tighter control,
-fewer surprises. `w` uses only information at the forecast origin (no lookahead).
-
-We recompute the actual next-session return from the hourly cache for each origin.""")
-    code("""# recover the actual next-session return for each origin, from the hourly cache
-cache = {tk: pd.read_pickle(f"research/probe_hourly_rv/data/hourly_cache/{tk}.pkl")
+The Moreira–Muir test. Scale each name's exposure by `w_t = c / σ̂_t` (inverse
+vol) — or `c / σ̂_t²` (inverse variance) — then equal-weight the 8 names.
+`c` is set so the managed series has the **same unconditional vol as buy-and-hold**,
+so any Sharpe difference is about *timing the exposure*, not average leverage.
+`w_t` uses only information at the origin. Leverage capped at 3×.""")
+    code("""cache = {tk: pd.read_pickle(f"research/probe_hourly_rv/data/hourly_cache/{tk}.pkl")
          for tk in names}
 def session_ret(row):
     df = cache[row["ticker"]]
     i = df.index.get_indexer([row["origin"]], method="nearest")[0]
     return float(np.log(df["close"].iloc[i:i+6]).diff().dropna().sum())
-d["sess_ret"] = d.apply(session_ret, axis=1)""")
-    code("""# PER-NAME vol targeting (no cross-name scale confound), then average across names.
-# w_t = mean(sigma_hat) / sigma_hat_t   -> mean leverage ~1, uses only info at t.
-MODELS = ["constant", "ewma", "naive", "combo_insample", "kronos", "kronos_recal"]
-def vt_stats(g):
-    out = {}
-    for m in MODELS:
-        w = pd.Series(1.0, index=g.index) if m=="constant" else g[m].mean()/g[m].clip(1e-5)
-        delivered = w * g["realized"]        # ex-post risk actually carried
-        sr = w * g["sess_ret"]
-        out[(m,"CV")]   = delivered.std()/delivered.mean()
-        out[(m,"p95|r|")] = sr.abs().quantile(0.95)
-    return pd.Series(out)
+d["sess_ret"] = d.apply(session_ret, axis=1)
+PER_YR = 365.25 / ((d["origin"].max() - d["origin"].min()).days / d["origin"].nunique())
+print(f"~{PER_YR:.0f} forecast origins per year")""")
+    code("""def managed_portfolio(power=1.0, cap=3.0):
+    \"\"\"return a DataFrame: index = origin timestamp, columns = model, values = portfolio return\"\"\"
+    piv = {}
+    for m in ["buyhold","ewma","naive","kronos","kronos_recal"]:
+        parts = []
+        for tk, g in d.groupby("ticker"):
+            g = g.sort_values("origin")
+            if m == "buyhold":
+                w = pd.Series(1.0, index=g.index)
+            else:
+                raw = (1.0 / g[m].clip(1e-5)) ** power
+                w = (raw / raw.mean()).clip(upper=cap)
+                w *= g["sess_ret"].std() / (w * g["sess_ret"]).std()   # vol-match to buy-hold
+            parts.append(pd.Series((w * g["sess_ret"]).values, index=g["origin"].values))
+        piv[m] = pd.concat(parts).groupby(level=0).mean()   # equal-weight the names
+    return pd.DataFrame(piv).sort_index()
 
-vt = d.groupby("ticker").apply(vt_stats).mean().unstack()
-vt["CV_vs_constant_%"] = (100*(vt["CV"]/vt.loc["constant","CV"] - 1)).round(1)
-vt.round(4)""")
-    md("""Per-name, averaged over the 8 names. **`CV`** = coefficient of variation
-of the risk you actually carry (`w · realised RV`); `constant` = no targeting.
-Lower is better; a perfect forecast → 0. **`CV_vs_constant_%`** > 0 means the
-forecast made control *worse* than doing nothing.""")
-    code("""# does it help in the turbulent regime specifically?
-def cv_regime(g, m):
-    w = pd.Series(1.0, index=g.index) if m=="constant" else g[m].mean()/g[m].clip(1e-5)
-    dr = w * g["realized"]
-    return dr.groupby(g["vol_q"], observed=True).apply(lambda s: s.std()/s.mean())
-reg = (d.groupby("ticker").apply(lambda g: pd.DataFrame({m: cv_regime(g,m)
-        for m in ["constant","ewma","kronos_recal"]}))
-        .groupby(level=1).mean().round(3))
-reg""")
-    code("""# rolling realised vol of the vol-targeted return series — flattest = best control
-fig, ax = plt.subplots(figsize=(13,4))
-for m,c in [("constant","#999"),("ewma","tab:blue"),("kronos_recal","crimson")]:
-    parts=[]
-    for tk,g in d.sort_values("origin").groupby("ticker"):
-        w = pd.Series(1.0,index=g.index) if m=="constant" else g[m].mean()/g[m].clip(1e-5)
-        parts.append((w*g["sess_ret"]) / g["sess_ret"].std())   # unit-vol per name
-    sr = pd.concat(parts).sort_index()
-    ax.plot(d["origin"].loc[sr.index].values,
-            sr.pow(2).rolling(60).mean().pow(.5).values, c=c, lw=1.4, label=m)
-ax.axhline(1.0, c="k", lw=.6, ls=":"); ax.set_ylabel("rolling realised vol (target=1)")
-ax.set_title("vol control over time — flatter & closer to 1 is better"); ax.legend(); plt.show()""")
-    md("""**Result (per-name, executed output above):**
+def stats(r):
+    sr = r.mean() / r.std() * np.sqrt(PER_YR)
+    dd = (r.cumsum() - r.cumsum().cummax()).min()
+    downside = r[r < 0].std()
+    return pd.Series({"ann_return": r.mean()*PER_YR, "ann_vol": r.std()*np.sqrt(PER_YR),
+                      "Sharpe": sr, "Sortino": r.mean()/downside*np.sqrt(PER_YR),
+                      "max_drawdown": dd, "worst_obs": r.min()})
 
-- **Raw Kronos modestly *improves* vol targeting** — delivered-risk CV −2.5% vs
-  constant weighting, beating even the in-sample "cheating" ceiling.
-- **EWMA makes it worse** (+6.1%), and naïve much worse (+35%). Inverse-vol
-  sizing with a lagging or noisy forecast actively hurts.
-- **Recalibrated Kronos is ~neutral on CV** (−0.5%) but trims the 95th-percentile
-  scaled return below constant (0.039 vs 0.040) where EWMA widens it (0.046).
-  Recal shrinks the forecasts toward the mean → less aggressive sizing → safer
-  tails, less CV improvement.
-- In the by-regime table, `kronos_recal` beats `ewma` in every regime.
-  *(`constant` "winning" within-regime is partly circular — `vol_q` is defined by
-  realised RV, so conditioning on it removes the variation targeting exploits.)*
+pf = managed_portfolio(power=1.0)
+tbl = pf.apply(stats).T.round(3)
+tbl["Sharpe_vs_buyhold"] = (tbl["Sharpe"] - tbl.loc["buyhold","Sharpe"]).round(3)
+tbl""")
+    code("""# is the Sharpe gap real, or sampling noise? block bootstrap over time.
+rng = np.random.default_rng(1)
+idx = pf.index.to_numpy(); n = len(idx); B = 4000; L = 8   # 8-obs blocks
+def boot_sharpe_gap(col):
+    gaps = []
+    starts = np.arange(n - L)
+    for _ in range(B):
+        pick = rng.choice(starts, size=n // L + 1)
+        sel = np.concatenate([np.arange(s, s+L) for s in pick])[:n]
+        s = pf.iloc[sel]
+        gaps.append((s[col].mean()/s[col].std() - s["buyhold"].mean()/s["buyhold"].std()) * np.sqrt(PER_YR))
+    lo, hi = np.percentile(gaps, [2.5, 97.5])
+    return np.mean(gaps), lo, hi
 
-**Bottom line:** yes, a Kronos forecast improves vol targeting — but the effect is
-small (~2.5% CV), because the underlying RV signal is marginal. What's clearer is
-that Kronos **beats EWMA**, the standard practitioner choice, which here degrades
-control rather than improving it.
+for m in ["ewma","kronos","kronos_recal"]:
+    mn, lo, hi = boot_sharpe_gap(m)
+    print(f"{m:14s} ΔSharpe vs buy-hold: {mn:+.2f}   95% CI [{lo:+.2f}, {hi:+.2f}]")""")
+    code("""# equity curves (all vol-matched to buy-hold)
+fig, ax = plt.subplots(figsize=(13, 4.5))
+for m, c in [("buyhold","#888"), ("ewma","tab:blue"), ("kronos","crimson"), ("kronos_recal","darkorange")]:
+    ax.plot(pf.index, pf[m].cumsum()*100, label=f"{m}  (SR {tbl.loc[m,'Sharpe']:.2f})", lw=1.6, c=c)
+ax.set_title("Vol-managed portfolio — cumulative return, all matched to buy-hold vol")
+ax.set_ylabel("cumulative %"); ax.legend(); ax.axhline(0, c="#ccc", lw=.6); plt.show()""")
+    code("""# robustness: variance-scaling (Moreira-Muir), and dropping the worst week
+print("inverse-VARIANCE scaling:")
+print(managed_portfolio(power=2.0).apply(lambda r: r.mean()/r.std()*np.sqrt(PER_YR)).round(2).to_string())
+worst = pf["buyhold"].idxmin()
+print(f"\\ndrop the worst buy-hold obs ({pd.Timestamp(worst).date()}):")
+print(pf.drop(worst).apply(lambda r: r.mean()/r.std()*np.sqrt(PER_YR)).round(2).to_string())""")
+    md("""**Result: no — not on this data.**
 
-*(Caveats: probe origins are ~1 per 6 sessions at mixed hours — a
-forecast-quality proxy, not a tradeable backtest. The 6-hourly-return RV target
-is noisy; a 5-min RV estimator would shrink apparent error for all models.
-Single-asset, no diversification, no turnover cost.)*""")
+| strategy | Sharpe | ΔSharpe vs buy-hold (95% CI) |
+|---|---|---|
+| buy-and-hold | **+0.32** | — |
+| kronos_recal-managed | +0.24 | −0.05  [−0.72, +0.81] |
+| kronos-managed | −0.44 | **−0.68  [−1.05, −0.31]** |
+| ewma-managed | −0.41 | −0.68  [−1.37, −0.03] |
+| naïve-managed | −0.76 | −1.09 |
+
+- **Aggressive inverse-vol sizing (raw Kronos or EWMA) significantly *hurts*
+  Sharpe** — the forecast isn't sharp enough; scaling hard on a noisy signal adds
+  timing error that swamps the vol-dampening benefit.
+- **The conservative version (`kronos_recal`) is statistically indistinguishable
+  from buy-and-hold** — it barely deviates, so it neither helps nor hurts.
+- Not one event: dropping the DeepSeek weekend still leaves buy-hold ahead
+  (0.49 vs 0.24). Inverse-*variance* scaling (Moreira–Muir's preferred form) is
+  worse still.
+
+**Why this doesn't contradict the earlier sections.** Kronos's vol *ranking* is
+real (§1–§5) and it improves vol *control* on tails (§8 good case). But
+Moreira–Muir vol management earns its Sharpe from a roughly-constant risk premium
+scaled against time-varying vol — that logic applies to *the market over
+decades*, not 8 individual tech names over 22 months, where the idiosyncratic
+return has no stable premium to harvest. A weak per-name RV signal on a short,
+concentrated sample is the wrong place to expect a Sharpe lift.
+
+*(120 time points → wide CIs. No costs, no borrow, mixed-hour origins,
+equal-weight 8 names. Directional evidence, not a backtest.)*""")
 
     md("""---
 ## What this establishes
@@ -368,10 +433,12 @@ Single-asset, no diversification, no turnover cost.)*""")
    ~1.9 to ~1.1 (below EWMA) without touching the ranking (§4).
 4. **Not an artefact** of the overnight-gap wart (§6, `edge` stable across origin
    hours) or one lucky name (§2).
-5. **It modestly improves vol targeting** (§9) — raw Kronos inverse-vol sizing
-   tightens delivered-risk CV ~2.5% vs constant and clearly beats EWMA (which
-   *worsens* control here). Small effect, right direction, beats the standard
-   baseline.
+5. **It does *not* improve a vol-targeting strategy's Sharpe** (§9). Aggressive
+   inverse-vol sizing on this per-name signal *hurts* (ΔSharpe −0.68 vs
+   buy-hold); the conservative recalibrated version is a wash. The RV ranking is
+   real but too weak, on too short and concentrated a sample, to lift
+   risk-adjusted returns. Where it does help is **tail control** on individual
+   forecasts (§8), not portfolio Sharpe.
 
 ## What the real study needs
 
@@ -384,11 +451,18 @@ Single-asset, no diversification, no turnover cost.)*""")
 
 ## Bottom line
 
-**GO.** Kronos is a *vol-expansion anticipation* signal for eventful names, not a
-general vol model. It adds real, statistically-robust information over EWMA,
-especially in turbulent regimes, and needs a cheap level-recalibration layer.
-That is a sound foundation for the desk: triage ranks on "unusual vol brewing,"
-which is Kronos's strength; the post-mortem asks "did it come, and why."
+Kronos on hourly bars **ranks which names will have a noisy session better than
+EWMA** — a real, bootstrap-robust +0.05 R² over EWMA, concentrated on the
+eventful names and turbulent regimes. It needs a cheap level-recalibration layer.
+
+It does **not** turn that into strategy Sharpe (§9) — the per-name signal is too
+weak on this sample for inverse-vol sizing to beat buy-and-hold. Its practical
+value is **ranking and tail-awareness**, not a return engine.
+
+For the desk, that's the right shape: triage ranks on "unusual vol brewing" —
+Kronos's strength — and the post-mortem asks "did it come, and why," which is
+where the news/catalyst layer earns its place (the §8 bad case is exactly a
+scheduled catalyst Kronos couldn't see).
 """)
     return nb
 

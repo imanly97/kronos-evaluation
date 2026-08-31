@@ -22,10 +22,14 @@ Analysis: [`notebooks/probe_findings.ipynb`](../../notebooks/probe_findings.ipyn
   higher-vol names and in the elevated/turbulent regime.
 - Miscalibrated on level (MZ slope 0.82, biased low); a cheap expanding-window
   affine recalibration fixes QLIKE (1.9 → 1.1, below EWMA), ranking unchanged.
-- Modestly **improves vol targeting**: raw-Kronos inverse-vol sizing tightens
-  delivered-risk CV ~2.5% vs constant weighting and beats EWMA, which *worsens*
-  control here.
+- Does **not** improve a vol-targeting strategy's Sharpe: aggressive inverse-vol
+  sizing on this per-name signal *hurts* (ΔSharpe −0.68 vs buy-and-hold, CI
+  excludes zero); a shrunk/recalibrated version is a wash. The RV signal is real
+  but too weak on this short, concentrated sample to lift risk-adjusted returns.
+  Where it does help is **tail-awareness** on individual forecasts.
 
-Small effects, but real, robust, and Kronos beats the standard practitioner
-baseline (EWMA). It ranks which names will have a noisy session — which is what a
-triage desk needs.
+The practical value is **ranking which names will have a noisy session** — which
+is what a triage desk needs — plus **not being fooled by stale vol spikes**
+(good case: AMD 2025-04-11). Its hard limit is scheduled catalysts, invisible to
+a price-only model (bad case: TSLA earnings 2025-07-23) — which is exactly where
+the desk's news/calendar layer earns its place.

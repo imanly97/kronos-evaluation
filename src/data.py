@@ -248,11 +248,16 @@ def session_bars(df_hourly: pd.DataFrame, day) -> pd.DataFrame:
     return df_hourly.loc[[ts.date() == d for ts in df_hourly.index]]
 
 
-def settled_sessions(df_hourly: pd.DataFrame, *, min_bars: int = 4) -> list[date]:
-    """Trading days with at least `min_bars` bars — i.e. complete, gradeable
-    sessions (drops the live/partial current day and any data gap)."""
+def settled_sessions(df_hourly: pd.DataFrame, *, min_bars: int = 3) -> list[date]:
+    """Complete, gradeable trading days.
+
+    Keeps half-days (early close before a holiday — 3–4 bars, all real). Drops
+    only the live/partial current session: a day is settled if it is not the
+    latest date in the data, or it already has a full 7 bars.
+    """
     n = pd.Series(1, index=df_hourly.index).groupby(df_hourly.index.date).sum()
-    return sorted(d for d, c in n.items() if c >= min_bars)
+    last = max(n.index)
+    return sorted(d for d, c in n.items() if c >= min_bars and (d != last or c >= 7))
 
 
 def _coerce_date(d) -> date:

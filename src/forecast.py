@@ -1,10 +1,13 @@
 """Run Kronos over an origin grid → the immutable forecast store (PLAN §6, §9).
 
-The only expensive part of the study. For each origin we batch **every name into
-one sampler call** (the vendored AR loop takes a batch dim the probe didn't use),
-reduce each name's sample-path distribution to the quantities the metrics need,
-and append to a parquet store. Resumable: an (origin, ticker) already present is
-skipped.
+The only expensive part of the study. For each (origin, name) we run the
+dispersion-preserving sampler once, reduce the sample-path distribution to the
+quantities the metrics need, and append to a parquet store. Resumable: an
+(origin, ticker) already present is skipped.
+
+Runs **unbatched** — profiling (2026-08) showed the MPS backend degrades ~6x per
+name with any batch dim and OOMs past batch 8. At L=250 / S=50, one forecast is
+~2.6s; the hourly-H1 dev grid (~11k forecasts) is ~8h.
 
   run(freq, H, split=…)   walk the grid, write store/{freq}_H{H}.parquet
 
@@ -38,10 +41,8 @@ from .config import (
     UNIVERSE,
 )
 from .data import DataError, context_before, get_daily, get_hourly, session_bars, settled_sessions
-from .kronos import FEAT_COLS, PRICE_COLS, _auto_regressive_paths, load_predictor
+from .kronos import PRICE_COLS, load_predictor, sample_paths
 from .targets import _GK_C
-
-from model.kronos import calc_time_stamps  # noqa: E402  (src.kronos put vendor on sys.path)
 
 _QS = (0.05, 0.25, 0.50, 0.75, 0.95)
 
@@ -84,34 +85,10 @@ def _reduce(paths: np.ndarray, prev_close: float) -> dict:
     }
 
 
-# --------------------------------------------------------------------------- #
-# batched sampler call
-# --------------------------------------------------------------------------- #
-def _forecast_batch(contexts: dict[str, pd.DataFrame], y_index: pd.DatetimeIndex,
-                    sample_count: int, predictor) -> dict[str, dict]:
-    names = list(contexts)
-    seqs, means, stds = [], [], []
-    for n in names:
-        x = contexts[n][FEAT_COLS].to_numpy(np.float32)
-        m, s = x.mean(0), x.std(0)
-        seqs.append(np.clip((x - m) / (s + 1e-5), -predictor.clip, predictor.clip))
-        means.append(m); stds.append(s)
-    X = np.stack(seqs)                                             # (N, L, 6)
-
-    ctx_ts = pd.DatetimeIndex(contexts[names[0]].index).tz_localize(None) \
-        if pd.DatetimeIndex(contexts[names[0]].index).tz else pd.DatetimeIndex(contexts[names[0]].index)
-    y_ts = pd.DatetimeIndex(y_index).tz_localize(None) if pd.DatetimeIndex(y_index).tz \
-        else pd.DatetimeIndex(y_index)
-    xs = calc_time_stamps(pd.Series(ctx_ts)).values.astype(np.float32)
-    ys = calc_time_stamps(pd.Series(y_ts)).values.astype(np.float32)
-    x_stamp = np.broadcast_to(xs[None], (len(names), *xs.shape))
-    y_stamp = np.broadcast_to(ys[None], (len(names), *ys.shape))
-
-    raw = _auto_regressive_paths(predictor, X, x_stamp, y_stamp, len(y_ts),
-                                 sample_count=sample_count)         # (N, S, T, 6)
-    return {n: _reduce(raw[i] * (stds[i] + 1e-5) + means[i],
-                       float(contexts[n]["close"].iloc[-1]))
-            for i, n in enumerate(names)}
+def _forecast_one(context: pd.DataFrame, y_index: pd.DatetimeIndex,
+                  sample_count: int, predictor) -> dict:
+    paths = sample_paths(context, y_index, sample_count=sample_count, predictor=predictor)
+    return _reduce(paths, float(context["close"].iloc[-1]))
 
 
 # --------------------------------------------------------------------------- #
@@ -184,7 +161,7 @@ def run(freq: str, H: int, *, split: str = "dev", every: int = 1,
         origin_ts = (session_bars(data[universe[0]], tgt_days[0]).index[0]
                      if freq == "hourly" else pd.Timestamp(tgt_days[0]))
 
-        contexts = {}
+        t0, n_origin = time.time(), 0
         for t in universe:
             if (D.isoformat(), t) in done:
                 continue
@@ -192,23 +169,23 @@ def run(freq: str, H: int, *, split: str = "dev", every: int = 1,
                 ctx = context_before(data[t], origin_ts, lookback)
             except DataError:
                 continue
-            if len(ctx) == lookback:
-                contexts[t] = ctx
-        if not contexts:
-            continue
-
-        t0 = time.time()
-        red = _forecast_batch(contexts, y_index, sample_count, predictor)
-        for t, r in red.items():
+            if len(ctx) != lookback:
+                continue
+            try:
+                r = _forecast_one(ctx, y_index, sample_count, predictor)
+            except Exception as exc:  # noqa: BLE001 — log + skip, don't sink the run
+                print(f"    !! {t} {D}: {exc}")
+                continue
             buf.append({"origin": D.isoformat(), "ticker": t, "freq": freq, "H": H,
                         "gen_ts": _utc(), "n_paths": sample_count, "lookback": lookback,
-                        "context_to": contexts[t].index[-1].isoformat(), **r})
-        n_written += len(red)
-        if (gi + 1) % 5 == 0 or gi == len(grid) - 1:
+                        "context_to": ctx.index[-1].isoformat(), **r})
+            n_written += 1
+            n_origin += 1
+        if (gi + 1) % 3 == 0 or gi == len(grid) - 1:
             _flush(freq, H, buf); buf.clear()
-            eta = (time.time() - t_start) / (gi + 1) * (len(grid) - gi - 1) / 60
-            print(f"  [{gi+1}/{len(grid)}] {D}  {len(red)} names  "
-                  f"{time.time()-t0:.0f}s/origin  {n_written} rows  eta {eta:.0f}m")
+            eta = (time.time() - t_start) / (gi + 1) * (len(grid) - gi - 1) / 3600
+            print(f"  [{gi+1}/{len(grid)}] {D}  {n_origin} names  "
+                  f"{time.time()-t0:.0f}s  {n_written} rows total  eta {eta:.1f}h", flush=True)
     _flush(freq, H, buf)
     return load_store(freq, H)
 

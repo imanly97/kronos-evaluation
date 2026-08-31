@@ -61,11 +61,14 @@ KRONOS_TOKENIZER = os.getenv("KRONOS_TOKENIZER", "NeoQuasar/Kronos-Tokenizer-bas
 KRONOS_DEVICE = os.getenv("KRONOS_DEVICE")        # None -> auto (mps / cpu)
 MAX_CONTEXT = 512                                 # Kronos-small / base window
 
-# context bars fed to the sampler (< MAX_CONTEXT)
+# context bars fed to the sampler (< MAX_CONTEXT).
+# 250 chosen for compute: MPS falls off a memory cliff above ~250 and with any
+# batch dim (profiled 2026-08). L=400 sensitivity check runs on a name subset.
 LOOKBACK_DAILY = 250
-LOOKBACK_HOURLY = 400
+LOOKBACK_HOURLY = 250
 
-SAMPLE_COUNT = 200                                # sampled paths per forecast
+SAMPLE_COUNT = 50                                 # sampled paths per forecast
+SAMPLE_COUNT_REF = 200                            # for the S-sensitivity check
 T = 1.0
 TOP_P = 0.9
 TOP_K = 0

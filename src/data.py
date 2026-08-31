@@ -115,13 +115,31 @@ def _from_yahoo_hourly(ticker: str) -> pd.DataFrame:
     q = res["indicators"]["quote"][0]
     df = pd.DataFrame({"open": q["open"], "high": q["high"], "low": q["low"],
                        "close": q["close"], "volume": q["volume"]}, index=ts).dropna()
-    f = _split_factor(res, df.index)         # hourly `close` is unadjusted
-    for c in OHLC:
-        df[c] = df[c] * f
+    # Yahoo's intraday feed is already SPLIT-adjusted (verified on NVDA's 2024-06
+    # 10:1 — the pre-split bars come back ~$120, not ~$1200). It is NOT dividend
+    # adjusted; for these large-caps the yield is <2%/yr so RV is unaffected.
+    _assert_no_split_jump(df, res, ticker)
     # regular-session hourly bars land at :30 (09:30 … 15:30). Anything else is
     # Yahoo's live/partial stub for the current bar — drop it.
     df = df[df.index.minute == 30]
     return _finalize(df, ticker, normalize_index=False)
+
+
+def _assert_no_split_jump(df: pd.DataFrame, res: dict, ticker: str) -> None:
+    """Guard against Yahoo's intraday feed silently changing its adjustment
+    convention: no >40% session-to-session close gap within a week of a split."""
+    splits = (res.get("events", {}) or {}).get("splits", {}) or {}
+    if not splits:
+        return
+    daily_last = df["close"].groupby(df.index.date).last()
+    gap = np.log(daily_last).diff().abs()
+    gidx = pd.DatetimeIndex(gap.index)
+    for ev in splits.values():
+        sd = pd.Timestamp(ev["date"], unit="s", tz="UTC").tz_convert(NY).normalize().tz_localize(None)
+        near = gap[(gidx >= sd - pd.Timedelta(days=5)) & (gidx <= sd + pd.Timedelta(days=2))]
+        if len(near) and near.max() > 0.40:
+            raise DataError(f"{ticker}: {near.max():.0%} close gap near the "
+                            f"{sd.date()} split — Yahoo intraday adjustment changed")
 
 
 def _finalize(df: pd.DataFrame, ticker: str, *, normalize_index: bool = True) -> pd.DataFrame:

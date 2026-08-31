@@ -135,3 +135,34 @@ def forward_daily_return(daily: pd.DataFrame, origin_day, H: int) -> float:
 
 def direction(x: float) -> int:
     return int(np.sign(x))
+
+
+# --------------------------------------------------------------------------- #
+# per-session series (the input the baselines and the eval consume)
+# --------------------------------------------------------------------------- #
+def session_rv_series(hourly: pd.DataFrame, estimator: str = "gk", *,
+                      min_bars: int = 4) -> pd.Series:
+    """One realised-vol value per settled session (intraday only)."""
+    out = {}
+    for d in settled_sessions(hourly, min_bars=min_bars):
+        out[pd.Timestamp(d)] = realised_vol(session_bars(hourly, d), estimator)
+    return pd.Series(out, name=f"rv_{estimator}").sort_index()
+
+
+def session_return_series(hourly: pd.DataFrame, *, min_bars: int = 4) -> pd.Series:
+    """Close-to-close log return per settled session (prev session close -> this)."""
+    closes = {}
+    for d in settled_sessions(hourly, min_bars=min_bars):
+        closes[pd.Timestamp(d)] = float(session_bars(hourly, d)["close"].iloc[-1])
+    s = pd.Series(closes).sort_index()
+    return np.log(s).diff().dropna().rename("sess_ret")
+
+
+def daily_rv_series(daily: pd.DataFrame, estimator: str = "gk") -> pd.Series:
+    """One realised-vol value per daily bar (daily study)."""
+    v = daily.apply(lambda row: realised_vol(row.to_frame().T, estimator), axis=1)
+    return v.rename(f"rv_{estimator}")
+
+
+def daily_return_series(daily: pd.DataFrame) -> pd.Series:
+    return np.log(daily["close"]).diff().dropna().rename("daily_ret")

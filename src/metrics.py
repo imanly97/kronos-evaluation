@@ -60,7 +60,7 @@ def mincer_zarnowitz(f: np.ndarray, y: np.ndarray, *, logs: bool = True,
         "r2": float(res.rsquared),
         "t_intercept_eq_0": float(res.tvalues[0]),
         "t_slope_eq_1": float((b - 1) / res.bse[1]),
-        "joint_p": float(np.ravel(wald.pvalue)),
+        "joint_p": float(np.asarray(wald.pvalue).item()),
     }
 
 
@@ -108,6 +108,32 @@ def pit(y: np.ndarray, q_grid: np.ndarray, taus: np.ndarray) -> np.ndarray:
             out[i] = np.clip(ts[-1] + slope * (yi - qs[-1]), 1e-4, 1 - 1e-4)
         else:
             out[i] = np.interp(yi, qs, ts)
+    return out
+
+
+def pit_exact(y: np.ndarray, sample_arrays) -> np.ndarray:
+    """Rank PIT: for each obs, (fraction of samples < y) with a mid-rank tie
+    correction and jitter so a calibrated forecast gives Uniform(0,1)."""
+    y = np.asarray(y, float)
+    out = np.empty(len(y))
+    for i, (yi, s) in enumerate(zip(y, sample_arrays)):
+        s = np.sort(np.asarray(s, float))
+        n = len(s)
+        below = np.searchsorted(s, yi, side="left")
+        equal = np.searchsorted(s, yi, side="right") - below
+        out[i] = (below + 0.5 * (equal + 1)) / (n + 1)
+    return np.clip(out, 1e-6, 1 - 1e-6)
+
+
+def crps_sample(y: np.ndarray, sample_arrays) -> np.ndarray:
+    """CRPS estimated from samples: E|X-y| - 0.5 E|X-X'| (per observation)."""
+    y = np.asarray(y, float)
+    out = np.empty(len(y))
+    for i, (yi, s) in enumerate(zip(y, sample_arrays)):
+        s = np.asarray(s, float)
+        term1 = np.mean(np.abs(s - yi))
+        term2 = np.mean(np.abs(s[:, None] - s[None, :]))
+        out[i] = term1 - 0.5 * term2
     return out
 
 

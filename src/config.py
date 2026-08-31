@@ -46,6 +46,18 @@ UNIVERSE: list[str] = [
 ]
 DEV_UNIVERSE = ["AAPL", "MSFT", "NVDA", "AMD", "JPM", "XOM", "NFLX", "TSLA"]  # probe set
 
+SECTOR: dict[str, str] = {
+    "AAPL": "Tech", "MSFT": "Tech", "NVDA": "Tech", "AMD": "Tech", "MU": "Tech", "CRM": "Tech",
+    "GOOGL": "Comm", "META": "Comm", "NFLX": "Comm",
+    "AMZN": "ConsDisc", "TSLA": "ConsDisc", "HD": "ConsDisc", "MCD": "ConsDisc",
+    "WMT": "ConsStap", "COST": "ConsStap", "PG": "ConsStap",
+    "JPM": "Fin", "BAC": "Fin", "GS": "Fin", "V": "Fin",
+    "UNH": "Health", "LLY": "Health", "JNJ": "Health", "MRK": "Health",
+    "XOM": "Energy", "CVX": "Energy",
+    "CAT": "Indu", "BA": "Indu",
+    "LIN": "Materials", "NEE": "Utilities",
+}
+
 # --- splits (PLAN §5) ---------------------------------------------------
 # Kronos-small pretraining ends ~2024-06-30 (arXiv:2508.02739).
 CONTAMINATED_END = "2024-06-30"

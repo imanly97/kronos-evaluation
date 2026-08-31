@@ -73,7 +73,7 @@ def _reduce(paths: np.ndarray, prev_close: float) -> dict:
     close = paths[:, :, PRICE_COLS.index("close")]
     cum_ret = np.log(np.clip(close[:, -1], 1e-9, None) / prev_close)
     gk = _gk_rv_per_path(paths)
-    return {
+    out = {
         "kronos_rv_gk": float(np.median(gk)),
         "kronos_rv_gk_mean": float(np.mean(gk)),
         "kronos_rv_park": float(np.median(_park_rv_per_path(paths))),
@@ -81,8 +81,14 @@ def _reduce(paths: np.ndarray, prev_close: float) -> dict:
         "kronos_path_rv_std": float(np.std(gk)),
         "kronos_ret_med": float(np.median(cum_ret)),
         "kronos_p_up": float(np.mean(cum_ret > 0)),
-        **{f"kronos_q{int(q*100):02d}": float(np.quantile(cum_ret, q)) for q in _QS},
     }
+    for q in _QS:
+        out[f"kronos_q{int(q*100):02d}"] = float(np.quantile(cum_ret, q))       # return quantiles
+        out[f"kronos_rv_q{int(q*100):02d}"] = float(np.quantile(gk, q))         # path-RV quantiles
+    # full sorted per-path arrays -> exact PIT / CRPS at eval time
+    out["ret_paths"] = np.sort(cum_ret).astype(np.float32).tolist()
+    out["rv_paths"] = np.sort(gk).astype(np.float32).tolist()
+    return out
 
 
 def _forecast_one(context: pd.DataFrame, y_index: pd.DatetimeIndex,

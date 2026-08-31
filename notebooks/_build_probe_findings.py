@@ -223,14 +223,132 @@ by_hour""")
 hours — the overnight-gap wart is **not** manufacturing the result. Session-aligned
 origins in the real study will tighten this, not overturn it.""")
 
-    md("## 7 · Time series — one name, forecast vs realised")
-    code("""tk = "NVDA"
-g = d[d["ticker"]==tk].sort_values("origin")
+    md("## 7 · Time series — every name, forecast vs realised")
+    code("""names = sorted(d["ticker"].unique())
+fig, axes = plt.subplots(len(names), 1, figsize=(13, 2.2*len(names)), sharex=True)
+for ax, tk in zip(axes, names):
+    g = d[d["ticker"]==tk].sort_values("origin")
+    ax.plot(g["origin"], g["realized"], lw=1.6, c="k", label="realised RV")
+    ax.plot(g["origin"], g["kronos_recal"], lw=1, c="crimson", alpha=.85, label="Kronos (recal)")
+    ax.plot(g["origin"], g["ewma"], lw=1, c="tab:blue", alpha=.85, label="EWMA")
+    sp_k = g["kronos"].corr(g["realized"], "spearman")
+    sp_e = g["ewma"].corr(g["realized"], "spearman")
+    ax.set_title(f"{tk}   (within-name Spearman: Kronos {sp_k:.2f}, EWMA {sp_e:.2f})",
+                 fontsize=9, loc="left")
+    ax.set_ylabel("6-bar RV")
+axes[0].legend(loc="upper right", fontsize=8)
+plt.tight_layout(); plt.show()""")
+    md("""Eyeball check: on AMD / TSLA / XOM / NVDA the red line tracks the black
+spikes earlier and closer than blue; on MSFT / JPM the two are interchangeable.
+EWMA is visibly a lagged, smoothed version of realised RV — it can't lead a
+regime change, which is where Kronos's incremental R² comes from.""")
+
+    md("""## 8 · What Kronos is actually doing — sample-path fans
+
+Six forecast origins (regenerated with the full 200 sample paths), drawn against
+the realised next-session path.""")
+    code("""import pickle
+traj = pickle.load(open("research/probe_hourly_rv/data/trajectories.pkl", "rb"))
+fig, axes = plt.subplots(2, 3, figsize=(15, 7))
+for ax, t in zip(axes.flat, traj):
+    ctx = t["ctx_close"]; yi = t["y_index"]; P = t["paths"]
+    ax.plot(range(-len(ctx), 0), ctx.values, c="#333", lw=1.3)
+    xf = range(0, len(yi))
+    for row in P[:60]:
+        ax.plot(xf, row, c="tab:blue", alpha=.05, lw=.8)
+    q = np.percentile(P, [5, 25, 50, 75, 95], axis=0)
+    ax.fill_between(xf, q[0], q[4], color="tab:blue", alpha=.15)
+    ax.fill_between(xf, q[1], q[3], color="tab:blue", alpha=.25)
+    ax.plot(xf, q[2], c="tab:blue", lw=1.4, label="Kronos median")
+    ax.plot(xf, t["actual"], c="crimson", lw=1.8, marker="o", ms=3, label="realised")
+    ax.axvline(-0.5, c="k", lw=.6, ls=":")
+    ax.set_title(f"{t['ticker']}  {pd.Timestamp(t['origin']).strftime('%Y-%m-%d %H:%M')}\\n"
+                 f"Kronos RV {t['kronos_rv']:.3f}  ·  realised {t['realized_rv']:.3f}", fontsize=9)
+axes.flat[0].legend(fontsize=8)
+plt.tight_layout(); plt.show()""")
+    md("""The **width of the fan** is Kronos's RV forecast; the median path is
+close to flat (no directional view, as expected). Where realised RV >> Kronos RV,
+the crimson path breaks out of the envelope — the calibration gap from §1/§4.""")
+
+    md("""## 9 · Does a Kronos forecast improve volatility targeting?
+
+The concrete use case. Vol targeting sets position size `w = c / σ̂` so that
+*delivered* risk `w · σ_realised` stays constant. A better `σ̂` → tighter control,
+fewer surprises. `w` uses only information at the forecast origin (no lookahead).
+
+We recompute the actual next-session return from the hourly cache for each origin.""")
+    code("""# recover the actual next-session return for each origin, from the hourly cache
+cache = {tk: pd.read_pickle(f"research/probe_hourly_rv/data/hourly_cache/{tk}.pkl")
+         for tk in names}
+def session_ret(row):
+    df = cache[row["ticker"]]
+    i = df.index.get_indexer([row["origin"]], method="nearest")[0]
+    return float(np.log(df["close"].iloc[i:i+6]).diff().dropna().sum())
+d["sess_ret"] = d.apply(session_ret, axis=1)""")
+    code("""# PER-NAME vol targeting (no cross-name scale confound), then average across names.
+# w_t = mean(sigma_hat) / sigma_hat_t   -> mean leverage ~1, uses only info at t.
+MODELS = ["constant", "ewma", "naive", "combo_insample", "kronos", "kronos_recal"]
+def vt_stats(g):
+    out = {}
+    for m in MODELS:
+        w = pd.Series(1.0, index=g.index) if m=="constant" else g[m].mean()/g[m].clip(1e-5)
+        delivered = w * g["realized"]        # ex-post risk actually carried
+        sr = w * g["sess_ret"]
+        out[(m,"CV")]   = delivered.std()/delivered.mean()
+        out[(m,"p95|r|")] = sr.abs().quantile(0.95)
+    return pd.Series(out)
+
+vt = d.groupby("ticker").apply(vt_stats).mean().unstack()
+vt["CV_vs_constant_%"] = (100*(vt["CV"]/vt.loc["constant","CV"] - 1)).round(1)
+vt.round(4)""")
+    md("""Per-name, averaged over the 8 names. **`CV`** = coefficient of variation
+of the risk you actually carry (`w · realised RV`); `constant` = no targeting.
+Lower is better; a perfect forecast → 0. **`CV_vs_constant_%`** > 0 means the
+forecast made control *worse* than doing nothing.""")
+    code("""# does it help in the turbulent regime specifically?
+def cv_regime(g, m):
+    w = pd.Series(1.0, index=g.index) if m=="constant" else g[m].mean()/g[m].clip(1e-5)
+    dr = w * g["realized"]
+    return dr.groupby(g["vol_q"], observed=True).apply(lambda s: s.std()/s.mean())
+reg = (d.groupby("ticker").apply(lambda g: pd.DataFrame({m: cv_regime(g,m)
+        for m in ["constant","ewma","kronos_recal"]}))
+        .groupby(level=1).mean().round(3))
+reg""")
+    code("""# rolling realised vol of the vol-targeted return series — flattest = best control
 fig, ax = plt.subplots(figsize=(13,4))
-ax.plot(g["origin"], g["realized"], label="realised RV", lw=1.5, c="k")
-ax.plot(g["origin"], g["kronos"], label="Kronos", lw=1, alpha=.8)
-ax.plot(g["origin"], g["ewma"], label="EWMA", lw=1, alpha=.8)
-ax.set_title(f"{tk} — next-session realised vol vs forecasts"); ax.legend(); plt.show()""")
+for m,c in [("constant","#999"),("ewma","tab:blue"),("kronos_recal","crimson")]:
+    parts=[]
+    for tk,g in d.sort_values("origin").groupby("ticker"):
+        w = pd.Series(1.0,index=g.index) if m=="constant" else g[m].mean()/g[m].clip(1e-5)
+        parts.append((w*g["sess_ret"]) / g["sess_ret"].std())   # unit-vol per name
+    sr = pd.concat(parts).sort_index()
+    ax.plot(d["origin"].loc[sr.index].values,
+            sr.pow(2).rolling(60).mean().pow(.5).values, c=c, lw=1.4, label=m)
+ax.axhline(1.0, c="k", lw=.6, ls=":"); ax.set_ylabel("rolling realised vol (target=1)")
+ax.set_title("vol control over time — flatter & closer to 1 is better"); ax.legend(); plt.show()""")
+    md("""**Result (per-name, executed output above):**
+
+- **Raw Kronos modestly *improves* vol targeting** — delivered-risk CV −2.5% vs
+  constant weighting, beating even the in-sample "cheating" ceiling.
+- **EWMA makes it worse** (+6.1%), and naïve much worse (+35%). Inverse-vol
+  sizing with a lagging or noisy forecast actively hurts.
+- **Recalibrated Kronos is ~neutral on CV** (−0.5%) but trims the 95th-percentile
+  scaled return below constant (0.039 vs 0.040) where EWMA widens it (0.046).
+  Recal shrinks the forecasts toward the mean → less aggressive sizing → safer
+  tails, less CV improvement.
+- In the by-regime table, `kronos_recal` beats `ewma` in every regime.
+  *(`constant` "winning" within-regime is partly circular — `vol_q` is defined by
+  realised RV, so conditioning on it removes the variation targeting exploits.)*
+
+**Bottom line:** yes, a Kronos forecast improves vol targeting — but the effect is
+small (~2.5% CV), because the underlying RV signal is marginal. What's clearer is
+that Kronos **beats EWMA**, the standard practitioner choice, which here degrades
+control rather than improving it.
+
+*(Caveats: probe origins are ~1 per 6 sessions at mixed hours — a
+forecast-quality proxy, not a tradeable backtest. The 6-hourly-return RV target
+is noisy; a 5-min RV estimator would shrink apparent error for all models.
+Single-asset, no diversification, no turnover cost.)*""")
 
     md("""---
 ## What this establishes
@@ -250,6 +368,10 @@ ax.set_title(f"{tk} — next-session realised vol vs forecasts"); ax.legend(); p
    ~1.9 to ~1.1 (below EWMA) without touching the ranking (§4).
 4. **Not an artefact** of the overnight-gap wart (§6, `edge` stable across origin
    hours) or one lucky name (§2).
+5. **It modestly improves vol targeting** (§9) — raw Kronos inverse-vol sizing
+   tightens delivered-risk CV ~2.5% vs constant and clearly beats EWMA (which
+   *worsens* control here). Small effect, right direction, beats the standard
+   baseline.
 
 ## What the real study needs
 

@@ -18,6 +18,11 @@ def build() -> nbf.NotebookNode:
 
     md("""# Hourly RV probe — findings
 
+> **This is the pilot.** The full, rigorous evaluation — 30 names, walk-forward
+> HAR/GARCH baselines, Diebold–Mariano tests, Model Confidence Set, aligned
+> origins — lives in **`02_vol_forecast_eval.ipynb`**. Where the two disagree,
+> trust `02`. Kept here for the go/no-go reasoning and the sample-path plots.
+
 **Question.** Kronos-small has *no* directional skill on daily equity bars
 (49.5% sign hit vs 54.6% base). Does it forecast **realised volatility** on
 **hourly** bars — the timescale and moment it was actually built for?
@@ -43,11 +48,21 @@ from pathlib import Path
 D = Path("research/probe_hourly_rv/data")
 d = pd.read_pickle(D / "probe_results.pkl").copy()
 d["origin"] = pd.to_datetime(d["origin"])
+
+# --- alignment: keep only origins shared by ALL tickers ------------------
+# The probe placed origins by index into each ticker's own bar array; JPM/XOM
+# had one fewer hourly bar, so ~34 of their 120 origins land on off dates.
+# Every cross-name calc below (esp. the portfolio in §9) needs a common grid.
+_shared = set.intersection(*(set(g["origin"]) for _, g in d.groupby("ticker")))
+_before = len(d)
+d = d[d["origin"].isin(_shared)].reset_index(drop=True)
+print(f"aligned to common origins: {d.origin.nunique()} origins x {d.ticker.nunique()} "
+      f"names = {len(d)} rows  (dropped {_before - len(d)} off-grid JPM/XOM rows)")
+
 d["hour"] = d["origin"].dt.hour
 d["month"] = d["origin"].dt.to_period("M")
 for c in ["realized","kronos","ewma","har","naive"]:
     d[f"log_{c}"] = np.log(d[c].clip(lower=1e-9))
-print(d.shape, "| origins", d.origin.min().date(), "->", d.origin.max().date())
 d.head()""")
 
     code("""import warnings; warnings.filterwarnings("ignore")
@@ -229,7 +244,7 @@ fig, axes = plt.subplots(len(names), 1, figsize=(13, 2.2*len(names)), sharex=Tru
 for ax, tk in zip(axes, names):
     g = d[d["ticker"]==tk].sort_values("origin")
     ax.plot(g["origin"], g["realized"], lw=1.6, c="k", label="realised RV")
-    ax.plot(g["origin"], g["kronos_recal"], lw=1, c="crimson", alpha=.85, label="Kronos (recal)")
+    ax.plot(g["origin"], g["kronos"], lw=1, c="crimson", alpha=.85, label="Kronos")
     ax.plot(g["origin"], g["ewma"], lw=1, c="tab:blue", alpha=.85, label="EWMA")
     sp_k = g["kronos"].corr(g["realized"], "spearman")
     sp_e = g["ewma"].corr(g["realized"], "spearman")
@@ -317,7 +332,9 @@ The Moreira–Muir test. Scale each name's exposure by `w_t = c / σ̂_t` (inver
 vol) — or `c / σ̂_t²` (inverse variance) — then equal-weight the 8 names.
 `c` is set so the managed series has the **same unconditional vol as buy-and-hold**,
 so any Sharpe difference is about *timing the exposure*, not average leverage.
-`w_t` uses only information at the origin. Leverage capped at 3×.""")
+`w_t` uses only information at the origin. Leverage capped at 3×. All models are
+scored on the identical window — `kronos_recal` needs a 20-observation warm-up
+before it can produce a forecast, so the first ~20 origins are dropped.""")
     code("""cache = {tk: pd.read_pickle(f"research/probe_hourly_rv/data/hourly_cache/{tk}.pkl")
          for tk in names}
 def session_ret(row):
@@ -342,7 +359,9 @@ print(f"~{PER_YR:.0f} forecast origins per year")""")
                 w *= g["sess_ret"].std() / (w * g["sess_ret"]).std()   # vol-match to buy-hold
             parts.append(pd.Series((w * g["sess_ret"]).values, index=g["origin"].values))
         piv[m] = pd.concat(parts).groupby(level=0).mean()   # equal-weight the names
-    return pd.DataFrame(piv).sort_index()
+    # dropna() -> every model scored on the identical window (kronos_recal needs
+    # a 20-obs warm-up before it produces a forecast)
+    return pd.DataFrame(piv).sort_index().dropna()
 
 def stats(r):
     sr = r.mean() / r.std() * np.sqrt(PER_YR)
@@ -385,35 +404,37 @@ print(managed_portfolio(power=2.0).apply(lambda r: r.mean()/r.std()*np.sqrt(PER_
 worst = pf["buyhold"].idxmin()
 print(f"\\ndrop the worst buy-hold obs ({pd.Timestamp(worst).date()}):")
 print(pf.drop(worst).apply(lambda r: r.mean()/r.std()*np.sqrt(PER_YR)).round(2).to_string())""")
-    md("""**Result: no — not on this data.**
+    md("""**Result: no evidence either way — the sample is too small to tell.**
+
+On the aligned data (8-name equal-weight portfolio, ~65 origins, all models on
+the identical window):
 
 | strategy | Sharpe | ΔSharpe vs buy-hold (95% CI) |
 |---|---|---|
-| buy-and-hold | **+0.32** | — |
-| kronos_recal-managed | +0.24 | −0.05  [−0.72, +0.81] |
-| kronos-managed | −0.44 | **−0.68  [−1.05, −0.31]** |
-| ewma-managed | −0.41 | −0.68  [−1.37, −0.03] |
-| naïve-managed | −0.76 | −1.09 |
+| buy-and-hold | **1.41** | — |
+| ewma-managed | 1.18 | −0.29  [−0.68, +0.13] |
+| kronos_recal-managed | 1.12 | −0.21  [−0.47, +0.05] |
+| kronos-managed | 1.03 | −0.27  [−0.61, +0.07] |
+| naïve-managed | 0.57 | −0.85 |
 
-- **Aggressive inverse-vol sizing (raw Kronos or EWMA) significantly *hurts*
-  Sharpe** — the forecast isn't sharp enough; scaling hard on a noisy signal adds
-  timing error that swamps the vol-dampening benefit.
-- **The conservative version (`kronos_recal`) is statistically indistinguishable
-  from buy-and-hold** — it barely deviates, so it neither helps nor hurts.
-- Not one event: dropping the DeepSeek weekend still leaves buy-hold ahead
-  (0.49 vs 0.24). Inverse-*variance* scaling (Moreira–Muir's preferred form) is
-  worse still.
+- Every vol-managed variant has a **lower point Sharpe than buy-and-hold**, but
+  the bootstrap CIs for EWMA, Kronos and Kronos_recal all **include zero** — no
+  statistically significant difference.
+- Naïve (last-6-bars) sizing clearly hurts.
+- Robustness: inverse-*variance* scaling gives the same picture (buy-hold 1.41,
+  kronos_recal 0.94, ewma 1.00); dropping the single worst observation pulls
+  everything up near buy-hold (1.6–1.8).
 
-**Why this doesn't contradict the earlier sections.** Kronos's vol *ranking* is
-real (§1–§5) and it improves vol *control* on tails (§8 good case). But
-Moreira–Muir vol management earns its Sharpe from a roughly-constant risk premium
-scaled against time-varying vol — that logic applies to *the market over
-decades*, not 8 individual tech names over 22 months, where the idiosyncratic
-return has no stable premium to harvest. A weak per-name RV signal on a short,
-concentrated sample is the wrong place to expect a Sharpe lift.
+**⚠️ This section supersedes an earlier version.** Before the origin-alignment
+fix at the top of this notebook, JPM/XOM sat on an off-grid set of dates, so the
+"8-name equal-weight portfolio" had a varying composition, and `kronos_recal` was
+scored on ~20 fewer observations than the others. That version reported a
+significant ΔSharpe of −0.68 (CI excluding zero). It was an artefact of the
+misalignment. The honest read on clean data: **no evidence a Kronos vol forecast
+lifts strategy Sharpe here, and no evidence it hurts** — the ~65-origin,
+tech-heavy, cost-free sample simply cannot resolve an effect this size.
 
-*(120 time points → wide CIs. No costs, no borrow, mixed-hour origins,
-equal-weight 8 names. Directional evidence, not a backtest.)*""")
+*(No costs, no borrow, mixed-hour origins, equal-weight 8 names. Not a backtest.)*""")
 
     md("""---
 ## What this establishes
@@ -433,12 +454,12 @@ equal-weight 8 names. Directional evidence, not a backtest.)*""")
    ~1.9 to ~1.1 (below EWMA) without touching the ranking (§4).
 4. **Not an artefact** of the overnight-gap wart (§6, `edge` stable across origin
    hours) or one lucky name (§2).
-5. **It does *not* improve a vol-targeting strategy's Sharpe** (§9). Aggressive
-   inverse-vol sizing on this per-name signal *hurts* (ΔSharpe −0.68 vs
-   buy-hold); the conservative recalibrated version is a wash. The RV ranking is
-   real but too weak, on too short and concentrated a sample, to lift
-   risk-adjusted returns. Where it does help is **tail control** on individual
-   forecasts (§8), not portfolio Sharpe.
+5. **No detectable effect on vol-targeting Sharpe** (§9). Every vol-managed
+   variant has a slightly lower point Sharpe than buy-and-hold, but the bootstrap
+   CIs include zero — the ~65-origin, tech-heavy, cost-free sample can't resolve
+   an effect this small. (An earlier version of §9 reported a significant −0.68
+   ΔSharpe; that was an origin-misalignment artefact, now corrected.) Kronos's
+   value here is **vol ranking**, not a return engine.
 
 ## What the real study needs
 
@@ -455,9 +476,9 @@ Kronos on hourly bars **ranks which names will have a noisy session better than
 EWMA** — a real, bootstrap-robust +0.05 R² over EWMA, concentrated on the
 eventful names and turbulent regimes. It needs a cheap level-recalibration layer.
 
-It does **not** turn that into strategy Sharpe (§9) — the per-name signal is too
-weak on this sample for inverse-vol sizing to beat buy-and-hold. Its practical
-value is **ranking and tail-awareness**, not a return engine.
+Whether that translates into strategy Sharpe is **unresolved** here (§9) — the
+sample is too small to tell. Its practical value on the evidence is **ranking and
+tail-awareness**, not a demonstrated return engine.
 
 For the desk, that's the right shape: triage ranks on "unusual vol brewing" —
 Kronos's strength — and the post-mortem asks "did it come, and why," which is

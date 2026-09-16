@@ -27,4 +27,4 @@ Kronos.from_pretrained("NeoQuasar/Kronos-small")
 print("   weights ready")
 PY
 
-echo "done. try:  .venv/bin/python -m pytest -q"
+echo "done. try:  .venv/bin/python research/probe_hourly_rv/probe_hourly_rv.py"

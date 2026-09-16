@@ -8,27 +8,27 @@ and *zero* dispersion.
 `sample_paths()` runs the identical batched inference and returns the array
 *before* the mean, shape `(sample_count, pred_len, 6)` — the full predictive
 distribution. This is the only Kronos code we own; everything else is vendored
-in `vendor_kronos/`.
+in `vendor_kronos/` (cloned by `scripts/setup.sh`, not part of this repo).
 """
 from __future__ import annotations
 
+import os
 import sys
 from functools import lru_cache
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
 
-from .config import (
-    KRONOS_DEVICE,
-    KRONOS_MODEL,
-    KRONOS_SRC,
-    KRONOS_TOKENIZER,
-    MAX_CONTEXT,
-    SAMPLE_COUNT,
-    T,
-    TOP_K,
-    TOP_P,
-)
+ROOT = Path(__file__).resolve().parent.parent
+os.environ.setdefault("HF_HOME", str(ROOT / "hf_cache"))   # weights stay in-project
+KRONOS_SRC = ROOT / "vendor_kronos"
+
+KRONOS_MODEL = os.getenv("KRONOS_MODEL", "NeoQuasar/Kronos-small")
+KRONOS_TOKENIZER = os.getenv("KRONOS_TOKENIZER", "NeoQuasar/Kronos-Tokenizer-base")
+KRONOS_DEVICE = os.getenv("KRONOS_DEVICE")            # None -> auto (mps / cpu)
+MAX_CONTEXT = 512                                     # Kronos-small / base window
+SAMPLE_COUNT, T, TOP_K, TOP_P = 50, 1.0, 0, 0.9        # sample_paths() defaults
 
 sys.path.insert(0, str(KRONOS_SRC))
 from model.kronos import (  # noqa: E402

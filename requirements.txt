@@ -1,4 +1,4 @@
-# Kronos evaluation — pinned deps.
+# Kronos evaluation — pinned deps for re-running the notebooks / probe scripts.
 # Installed into a project-local .venv (see README) so the anaconda base env
 # and its jupyter stay untouched.
 
@@ -6,7 +6,6 @@
 numpy==1.26.4
 pandas==2.2.3
 scipy==1.13.1
-pyarrow>=17          # parquet price cache
 
 # --- Kronos (frozen forecaster) ---
 torch>=2.2
@@ -17,20 +16,11 @@ tqdm==4.67.1
 
 # --- prices ---
 # Yahoo's chart API directly through curl_cffi (browser-TLS impersonation) —
-# the stdlib/requests UA gets 429'd. yfinance kept as a secondary parser path.
+# the stdlib/requests UA gets 429'd.
 curl_cffi==0.7.4
-yfinance==0.2.51
-# Stooq fallback is a plain CSV URL fetch — no extra dep.
-
-# --- evaluation ---
-statsmodels==0.14.2      # HAC / Newey-West SEs, Diebold-Mariano, regressions
-arch==7.0.0              # GARCH(1,1), GJR-GARCH baselines
 
 # --- charts + notebooks ---
 matplotlib==3.9.3
 jupyterlab==4.3.4
 ipykernel==6.29.5
 nbconvert==7.16.4
-
-# --- dev ---
-pytest==8.3.4

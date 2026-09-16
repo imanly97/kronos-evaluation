@@ -1,73 +1,104 @@
-# Evaluating Kronos for equity price forecasting
+# Kronos Evaluation
 
 Does [Kronos](https://github.com/shiyu-coder/Kronos) — an open-source foundation
 model for financial candlesticks — have genuine, baseline-beating forecasting
-skill on US equities? This repo is a rigorous, reproducible answer: a **map** of
-where it works and where it fails, across horizon, frequency, target (realised
-volatility / distribution calibration / return direction) and regime, against the
-right classical baseline in each cell, with the statistics to defend it.
+skill on US equities?
 
-Kronos is a **frozen input** — no training, no fine-tuning.
+**No.** Kronos-small has no directional skill, and on volatility — the one
+place it shows any signal — it loses to a standard HAR-RV model. It carries a
+small, statistically robust slice of information that even HAR misses, but not
+enough to justify treating it as a forecasting edge. That result is the
+deliverable of this repo.
 
-Full plan, methodology, and splits: [`PLAN.md`](PLAN.md).
+## The finding
 
-## What we know so far (the pilot)
+- **No directional skill.** Daily-bar sign prediction: 49.5% hit rate vs a
+  54.6% "always guess up" baseline. Worse than the naive rule.
+- **Loses to HAR-RV on volatility.** Hourly, 1-session-ahead realised
+  volatility, 30 large-caps, 11,340 out-of-sample forecasts (Jul 2024–Dec 2025,
+  strictly after Kronos's ~June-2024 pretraining cutoff): HAR-RV is the *sole*
+  member of the 90% Model Confidence Set on QLIKE loss. Raw Kronos is
+  statistically tied with plain EWMA; a cheap recalibration layer gets it just
+  past EWMA and still short of HAR.
+- **Does carry orthogonal information** — adding Kronos to HAR still lifts
+  log-RV R² by +0.013 (bootstrap 95% CI [0.010, 0.015]). Real, but small.
+- **Badly overconfident.** Its nominal 90% forecast interval covers realised
+  moves only 68% of the time.
+- **The edge is sector-structured, not random.** It beats EWMA in
+  flow-driven names (Tech, Financials, Consumer Discretionary) and loses in
+  event-driven ones (Health, Utilities, Materials) — consistent with a
+  price-only model being blind to scheduled and unscheduled news (an earnings
+  gap and a weekend news shock are both visible as clean forecast failures in
+  the sample-path plots).
 
-`research/probe_hourly_rv/` — 8 names, 960 forecasts, out of sample:
+Full detail, plots, and hypothesis tests: **[`notebooks/`](notebooks/)**.
 
-- **No directional skill** on daily bars (49.5% sign hit vs 54.6% base rate).
-- **Modest realised-vol skill** on hourly bars — +0.05 incremental log-RV R² over
-  EWMA (bootstrap CI excludes zero); edge concentrated on high-vol names and
-  turbulent regimes.
-- **Miscalibrated on level** (biased low); a cheap affine recalibration fixes it.
-- **Overconfident intervals** (daily 90% band covers ~78%).
-- Big misses cluster on **price gaps** — news/earnings the price-only model can't
-  see. Deferred to a follow-up study.
+## Notebooks (the analysis)
 
-See [`notebooks/probe_findings.ipynb`](notebooks/probe_findings.ipynb).
+- **[`02_vol_forecast_eval.ipynb`](notebooks/02_vol_forecast_eval.ipynb)** —
+  the primary result. 30 names, walk-forward HAR-RV / GARCH / EWMA baselines,
+  Diebold–Mariano tests, Model Confidence Set, incremental-information
+  regression with bootstrap CIs, calibration (exact rank-PIT / CRPS), and cuts
+  by realised-vol regime and sector.
+- **[`probe_findings.ipynb`](notebooks/probe_findings.ipynb)** — the earlier
+  8-name pilot that motivated the full study: sample-path fan charts (a clean
+  "Kronos gets it right" and a clean "Kronos misses the earnings gap" case),
+  and a vol-targeting / Sharpe robustness check. Superseded by the notebook
+  above wherever the two differ; kept for the go/no-go reasoning and the plots.
 
-## Splits
+Both notebooks are executed and self-contained — outputs are baked in, no need
+to re-run anything to see the result.
 
-Kronos-small pretraining ends **~June 2024** (arXiv:2508.02739). The splits
-control *our* methodology overfitting, not the model's:
+## Methodology
 
-| window | dates | use |
-|---|---|---|
-| contaminated | ≤ 2024-06-30 | daily only; measure the contamination gap |
-| OOS-development | 2024-07-01 → 2025-12-31 | all methodology choices |
-| OOS-lockbox | 2026-01-01 → 2026-08-31 | run once, report |
+- **Model:** `NeoQuasar/Kronos-small` (24.7M params), used strictly as a frozen
+  forecaster — no training or fine-tuning.
+- **The one piece of Kronos code in this repo** ([`src/kronos.py`](src/kronos.py)):
+  `KronosPredictor.predict(sample_count=N)` runs N sampled autoregressive paths
+  and **averages them** before returning — a single smoothed line with zero
+  dispersion. `sample_paths()` is the identical batched inference, returning
+  the array *before* the mean, so the full predictive distribution (used for
+  every forecast, quantile, and calibration check here) is preserved.
+- **Data:** Yahoo's chart API via `curl_cffi` (browser-TLS impersonation),
+  daily and hourly OHLCV, 30 large-caps selected by a liquidity screen
+  (`research/universe_screen.py`: trailing-year median dollar volume
+  ≥ $300M/day and worst day ≥ $50M) and hand-balanced across sectors and
+  volatility levels.
+- **Out-of-sample discipline:** Kronos-small's pretraining ends ~June 2024
+  (Shi et al., arXiv:2508.02739); every forecast origin here is July 2024 or
+  later, so results are not measuring memorisation.
+- **Target:** next-session realised volatility (Garman–Klass, intraday-only —
+  the overnight gap is excluded as a separate risk).
+- **Baselines:** EWMA, rolling-window, HAR-RV (Corsi), GARCH(1,1)/GJR — all
+  refit walk-forward, using only information available at each forecast
+  origin.
+- **Tests:** QLIKE loss, Mincer–Zarnowitz regression (HAC standard errors),
+  Diebold–Mariano, Hansen–Lunde–Nason Model Confidence Set, bootstrap CIs on
+  incremental R², exact rank-PIT and CRPS for calibration.
 
-## Quick start
+## Reproducing
 
 ```bash
-scripts/setup.sh                       # venv + deps + vendored Kronos + weights
-.venv/bin/python -m pytest -q          # no-lookahead + metric sanity tests
+scripts/setup.sh      # venv + deps + vendored Kronos + weights
+.venv/bin/python research/probe_hourly_rv/probe_hourly_rv.py   # the pilot
 ```
+
+The full 30-name study that produced `02_vol_forecast_eval.ipynb` used a larger
+harness (data pipeline, walk-forward baseline fitting, the evaluation harness
+itself) that isn't included here — this repo keeps the result and the
+methodology, not the engineering scaffolding. The notebook's code cells and
+their outputs are the complete, exact record of what was computed.
 
 ## Layout
 
 ```
-PLAN.md                     the study plan (questions, methodology, splits)
-docs/PLAN_v1_agentic_desk.md the archived prior direction
-src/
-  kronos.py                 the dispersion-preserving sampler (the only Kronos code we own)
-  data.py                   no-lookahead price loader (daily + hourly)
-  config.py                 paths, universe, splits, model params
-  targets.py                RV / direction / quantile target construction     [W1]
-  baselines.py              EWMA, HAR-RV, GARCH, RW — all walk-forward         [W1]
-  forecast.py               run Kronos over a grid of origins -> forecast store [W1]
-  metrics.py                QLIKE, pinball, CRPS, PIT, MZ, Diebold–Mariano, MCS [W1]
-  recalibrate.py            the expanding-window affine layer                  [W2]
-  evaluate.py               the harness                                        [W2]
-research/probe_hourly_rv/   the pilot study
-notebooks/                  01_data … 05_mechanism
-report/findings.md          the writeup
+README.md                        this file — the finding
+notebooks/
+  02_vol_forecast_eval.ipynb      the primary result (executed)
+  probe_findings.ipynb            the pilot (executed)
+research/
+  universe_screen.py / .csv       the 30-name liquidity + sector screen
+  probe_hourly_rv/                the pilot study — script, data, README
+src/kronos.py                     the one piece of Kronos code we wrote
+scripts/setup.sh                  environment setup
 ```
-
-## The one non-obvious thing
-
-`KronosPredictor.predict(sample_count=N)` runs N sampled paths and then
-**averages them** before returning — a smoothed mean line, zero dispersion.
-`src/kronos.py::_auto_regressive_paths` is the identical batched inference
-returning the array *before* the mean. That is the entire predictive
-distribution, and the distribution is what we're evaluating.

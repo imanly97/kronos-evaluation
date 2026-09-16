@@ -45,9 +45,14 @@ Full detail, plots, and hypothesis tests: **[`notebooks/`](notebooks/)**.
   "Kronos gets it right" and a clean "Kronos misses the earnings gap" case),
   and a vol-targeting / Sharpe robustness check. Superseded by the notebook
   above wherever the two differ; kept for the go/no-go reasoning and the plots.
+- **[`03_pilot_vs_full_comparison.ipynb`](notebooks/03_pilot_vs_full_comparison.ipynb)**
+  — a few basic charts putting the two side by side: QLIKE relative to EWMA in
+  each study, and the incremental-R² bootstrap CIs shrinking from "+0.065 over
+  EWMA" to "+0.013 over HAR-RV" once the real baseline is in. The short version
+  of the whole repo in two plots.
 
-Both notebooks are executed and self-contained — outputs are baked in, no need
-to re-run anything to see the result.
+All three notebooks are executed and self-contained — outputs are baked in, no
+need to re-run anything to see the result.
 
 ## Methodology
 
@@ -96,6 +101,7 @@ README.md                        this file — the finding
 notebooks/
   02_vol_forecast_eval.ipynb      the primary result (executed)
   probe_findings.ipynb            the pilot (executed)
+  03_pilot_vs_full_comparison.ipynb   pilot vs. full study, side by side (executed)
 research/
   universe_screen.py / .csv       the 30-name liquidity + sector screen
   probe_hourly_rv/                the pilot study — script, data, README

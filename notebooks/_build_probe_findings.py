@@ -18,10 +18,14 @@ def build() -> nbf.NotebookNode:
 
     md("""# Hourly RV probe — findings
 
-> **This is the pilot.** The full, rigorous evaluation — 30 names, walk-forward
-> HAR/GARCH baselines, Diebold–Mariano tests, Model Confidence Set, aligned
-> origins — lives in **`02_vol_forecast_eval.ipynb`**. Where the two disagree,
-> trust `02`. Kept here for the go/no-go reasoning and the sample-path plots.
+> **This is the pilot, and its headline number does not hold up.** The full
+> 30-name study with a properly-specified walk-forward HAR-RV baseline
+> (**`02_vol_forecast_eval.ipynb`**) found Kronos **loses to HAR-RV** on every
+> accuracy metric and is the sole model *excluded* from the 90% Model Confidence
+> Set. This notebook's own HAR baseline (§4) is a quick, badly-behaved
+> implementation — that's exactly why it doesn't get to be the final answer.
+> Kept here for the go/no-go reasoning and the sample-path plots; where the two
+> notebooks disagree, trust `02`.
 
 **Question.** Kronos-small has *no* directional skill on daily equity bars
 (49.5% sign hit vs 54.6% base). Does it forecast **realised volatility** on
@@ -121,11 +125,11 @@ print("Kronos beats EWMA within-name on %d / %d names" %
 per[["kronos_sp","ewma_sp"]].plot.barh(figsize=(7,4))
 plt.title("Spearman(forecast, realised RV) — within name"); plt.tight_layout(); plt.show()""")
     md("""The pooled 0.51 collapses to ~0.29 within-name. Kronos still wins the
-majority, and — cr0ss-referencing `mean_realized_vol` — its edge is largest on
+majority, and — cross-referencing `mean_realized_vol` — its edge is largest on
 the **higher-vol, more eventful names** (AMD, TSLA, XOM, NVDA) and negative on
-the two quietest (MSFT, JPM), where EWMA's "vol persists" assumption is hard to beat.
-That pattern — value concentrated where vol actually moves — is the useful one
-for a triage desk.""")
+the two quietest (MSFT, JPM), where EWMA's "vol persists" assumption is hard to
+beat. This is the pattern that motivated the full study — but note it's a
+within-name *rank* result against EWMA only; it says nothing yet about HAR.""")
 
     md("## 3 · Forecast vs realised — the shape of each model")
     code("""fig, ax = plt.subplots(1, 4, figsize=(15,3.6), sharex=True, sharey=True)
@@ -302,7 +306,7 @@ draw(ax[1], b, "BAD — TSLA, 23 Jul 2025",
      f"Q2 earnings that evening — a scheduled event invisible to a price-only\\n"
      f"model. Kronos RV {b['kronos_rv']*1e4:.0f}bp (calm), EWMA similar. "
      f"Realised {b['realized_rv']*1e4:.0f}bp:\\nthe stock gapped out of every "
-     f"envelope. This is why the desk needs a catalyst calendar.",
+     f"envelope. A calendar feature would catch this; raw OHLCV can't.",
      note_xy=(0.02, 0.97), note_va="top")
 ax[0].legend(loc="upper left", fontsize=8)
 plt.tight_layout(); plt.show()""")
@@ -437,53 +441,41 @@ tech-heavy, cost-free sample simply cannot resolve an effect this size.
 *(No costs, no borrow, mixed-hour origins, equal-weight 8 names. Not a backtest.)*""")
 
     md("""---
-## What this establishes
+## What this pilot establishes — and what it doesn't
 
-1. **Kronos carries genuine incremental volatility information.** Adding it to
-   EWMA lifts log-RV R² by **+0.053, 95% CI [+0.028, +0.084]** (§5) — the CI
-   excludes zero. Kronos *alone* (R² 0.256) beats EWMA *alone* (0.226). It still
-   adds on top of an in-sample "cheating" return-history model.
-2. **The edge is modest within-name and concentrated where it matters.** Pooled
-   Spearman 0.51 → ~0.29 within-name (§2). Kronos beats EWMA on the majority of
-   names, with the edge largest on the **eventful, higher-vol names** and in the
-   **elevated/turbulent regime** (§6) — i.e. it anticipates vol *expansion*,
-   which is exactly what a triage desk ranks on. It loses on the two quietest
-   names, where "vol persists" is unbeatable.
-3. **It is miscalibrated on level** — MZ slope ~0.82, biased low, worst in
-   turbulent regimes. An expanding-window affine recalibration takes QLIKE from
-   ~1.9 to ~1.1 (below EWMA) without touching the ranking (§4).
-4. **Not an artefact** of the overnight-gap wart (§6, `edge` stable across origin
-   hours) or one lucky name (§2).
-5. **No detectable effect on vol-targeting Sharpe** (§9). Every vol-managed
-   variant has a slightly lower point Sharpe than buy-and-hold, but the bootstrap
-   CIs include zero — the ~65-origin, tech-heavy, cost-free sample can't resolve
-   an effect this small. (An earlier version of §9 reported a significant −0.68
-   ΔSharpe; that was an origin-misalignment artefact, now corrected.) Kronos's
-   value here is **vol ranking**, not a return engine.
+1. **Against EWMA alone, Kronos looks promising.** Adding it to EWMA lifts
+   log-RV R² by +0.053 (95% CI [0.028, 0.084], §5) — the CI excludes zero.
+   Within-name it beats EWMA on 6/8 names (§2), most on the eventful, higher-vol
+   ones (§6). This is a real pattern in this 8-name sample, and it's what
+   justified running the full study.
+2. **It is miscalibrated on level** — MZ slope ~0.82, biased low. An
+   expanding-window affine recalibration takes QLIKE from ~1.9 to ~1.1 without
+   touching the ranking (§4).
+3. **On vol-targeting Sharpe, no effect either way** (§9) — bootstrap CIs
+   include zero on this ~65-origin sample. Not evidence it helps, not evidence
+   it hurts.
+4. **This notebook never tested Kronos against a properly-specified HAR-RV** —
+   the quick walk-forward HAR here is badly behaved (QLIKE in the thousands,
+   §1) and gets excluded from the comparison rather than fixed. That gap is
+   exactly what the full study closes, and closing it changes the verdict.
 
-## What the real study needs
+## What the full study found (`02_vol_forecast_eval.ipynb`)
 
-- session-aligned origins + a decided overnight convention
-- proper walk-forward HAR-RV / GARCH(1,1) baselines, Diebold–Mariano tests on the
-  loss differential
-- more names (~30), more horizons (1 / 2 / 3 sessions)
-- the recalibration layer as a first-class component of the deterministic core
-- batched Kronos inference — the sampler takes a batch dim we didn't use (~8×)
+30 names, 11,340 out-of-sample forecasts, a real walk-forward HAR-RV baseline:
+**HAR-RV wins outright** — lowest QLIKE, sole member of the 90% Model
+Confidence Set. Raw Kronos is statistically tied with plain EWMA; recalibrated
+Kronos edges past EWMA but still loses to HAR. Kronos does add a little
+information *even on top of HAR* (+0.013 log-RV R², CI [0.010, 0.015]) — small,
+real, and not nothing, but nowhere near enough to call it a working forecaster.
 
 ## Bottom line
 
-Kronos on hourly bars **ranks which names will have a noisy session better than
-EWMA** — a real, bootstrap-robust +0.05 R² over EWMA, concentrated on the
-eventful names and turbulent regimes. It needs a cheap level-recalibration layer.
-
-Whether that translates into strategy Sharpe is **unresolved** here (§9) — the
-sample is too small to tell. Its practical value on the evidence is **ranking and
-tail-awareness**, not a demonstrated return engine.
-
-For the desk, that's the right shape: triage ranks on "unusual vol brewing" —
-Kronos's strength — and the post-mortem asks "did it come, and why," which is
-where the news/catalyst layer earns its place (the §8 bad case is exactly a
-scheduled catalyst Kronos couldn't see).
+The pilot's EWMA comparison was the wrong bar. Against the model that's
+actually built for this problem, **Kronos-small does not beat HAR-RV on equity
+volatility forecasting.** It has no directional skill, its intervals are
+overconfident, and its one real contribution — a sliver of information HAR
+misses — is too small to build a forecasting product on. As a general-purpose
+time-series foundation model for this task, on this asset class: not there yet.
 """)
     return nb
 
